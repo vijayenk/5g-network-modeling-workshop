@@ -15,7 +15,7 @@ while currentTime < simulationDuration
     packetCount = packetCount + 1;
     packetTimes(packetCount) = currentTime;
     packetSizes(packetCount) = packetSize;
-    fprintf("Time: %f s - Generated a periodic packet of size %d bytes\n", currentTime, packetSize);
+    fprintf("Time: %f s - Generated a periodic packet_%d of size %d bytes\n", currentTime, packetCount,packetSize);
 end
 
 figure % Creates a new figure window
