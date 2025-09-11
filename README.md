@@ -1,7 +1,21 @@
 # 5G Network Modeling Workshop
 
+## Topic Description:  
+The 5G Network Modeling Workshop offers hands-on exercises designed to teach the end-to-end 5G network modeling workflow in MATLAB. With minimal coding effort, you'll be able to create a 5G scenario. This includes configuring various 5G network nodes, defining their positions, adding mobility and traffic models, and specifying the channel model. You will be able to simulate the 5G scenario, visualize network behavior, and evaluate performance metrics. 
 
+## Workshop Duration: 240 minutes  
 
+## Who Should Attend: 
+This content is intended for 5G system engineers and PHY/MAC engineers who are currently using, or interested in exploring, system-level 5G wireless network simulations in MATLAB. It is also relevant to scientists and engineers engaged in 5G standards development. 
+
+## What Attendees Will Learn: 
+This workshop will help attendees to: 
+•	Understand how to create and configure gNB and UE nodes, setup the 5G Network and simulate the network/ capture statistics and explore visualization tools. 
+•	Model the 5G scenario using 3GPP TR 38.901 Channel models, create and plug a custom channel model into the simulated 5G network. 
+•	Simulate a multicell interference scenario and measure the impact on network performance due to downlink (DL) intercell interference caused by nearby cells 
+•	Create and plug a custom resource-scheduling strategy in a 5G network, introduce custom traffic patterns, and mobility profiles to the 5G Nodes. 
+
+##
 This repo contains the files required to run the hands-on 5G network modeling workshop in MATLAB®. The "Exercise" files require code additions to  
 run.  The "Solution Scripts" files have the required code additions and run  
 to completion.
