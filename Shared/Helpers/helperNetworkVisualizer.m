@@ -83,8 +83,8 @@ classdef helperNetworkVisualizer < handle
                 resolution = get(0, 'ScreenSize');
                 screenWidth = resolution(3);
                 screenHeight = resolution(4);
-                figureWidth = screenWidth * 0.75;
-                figureHeight = screenHeight * 0.75;
+                figureWidth = screenWidth * 0.3;
+                figureHeight = screenHeight * 0.3;
                 fig = uifigure(Name="Network Layout Visualization", ...
                     Position=[screenWidth * 0.05 screenHeight * 0.05 figureWidth figureHeight]);
                 % Use desktop theme to support dark theme mode

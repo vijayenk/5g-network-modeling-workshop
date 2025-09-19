@@ -1202,8 +1202,8 @@ classdef helperNRGridVisualizer < handle
             resolution = get(0, 'ScreenSize');
             screenWidth = resolution(3);
             screenHeight = resolution(4);
-            figureWidth = screenWidth * 0.90;
-            figureHeight = screenHeight * 0.85;
+            figureWidth = screenWidth * 0.3;
+            figureHeight = screenHeight * 0.3;
 
             if obj.CQIGridVisualization % Create CQI visualization
                 obj.CQIVisualizationFigHandle = uifigure('Name', 'Channel Quality Visualization', 'Position', [screenWidth * 0.05 screenHeight * 0.05 figureWidth figureHeight], 'HandleVisibility', 'on');
