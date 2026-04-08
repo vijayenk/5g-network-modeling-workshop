@@ -32,58 +32,12 @@ classdef helperNRCustomSchedulingStrategy < nrScheduler
         %CQITable CQI table as per TS 38.214 - Table 5.2.2.1-3.
         % This table is used to indicate channel quality for DL direction
         % Modulation CodeRate Efficiency
-        CQITable = [0    0   0
-            2   78      0.1523
-            2   193     0.3770
-            2   449     0.8770
-            4   378     1.4766
-            4   490     1.9141
-            4   616     2.4063
-            6   466     2.7305
-            6   567     3.3223
-            6   666     3.9023
-            6   772     4.5234
-            6   873     5.1152
-            8   711     5.5547
-            8   797     6.2266
-            8   885     6.9141
-            8   948     7.4063];
+        CQITable = helperNRCustomSchedulingStrategy.getCQITable();
 
         %MCSTable MCS table as per TS 38.214 - Table 5.1.3.1-2.
         % This table is used to indicate MCS for both UL and DL directions
         % Modulation CodeRate Efficiency
-        MCSTable = [2	120	0.2344
-            2	193     0.3770
-            2	308     0.6016
-            2	449     0.8770
-            2	602     1.1758
-            4	378     1.4766
-            4	434     1.6953
-            4	490     1.9141
-            4	553     2.1602
-            4	616     2.4063
-            4	658     2.5703
-            6	466     2.7305
-            6	517     3.0293
-            6	567     3.3223
-            6	616     3.6094
-            6	666     3.9023
-            6	719     4.2129
-            6	772     4.5234
-            6	822     4.8164
-            6	873     5.1152
-            8	682.5	5.3320
-            8	711     5.5547
-            8	754     5.8906
-            8	797     6.2266
-            8	841     6.5703
-            8	885     6.9141
-            8	916.5	7.1602
-            8	948     7.4063
-            2    0       0
-            4    0       0
-            6    0       0
-            8    0       0];
+        MCSTable = helperNRCustomSchedulingStrategy.getMCSTable();
     end
 
     methods
@@ -349,6 +303,44 @@ classdef helperNRCustomSchedulingStrategy < nrScheduler
                 end
             end
             mcsRowIndex = mcsRowIndex - 1;
+        end
+    end
+
+    methods (Static)
+        function mcsTable = getMCSTable()
+            %getMCSTable  Returns the MCS table as per TS 38.214 - Section 5.1.3.1-2
+            %This table is used to indicate MCS for both DL and UL directions.
+            % Modulation CodeRate Efficiency
+
+            mcsTables = nrPUSCHMCSTables;
+            mcsTable = mcsTables.QAM256Table;
+
+            % Extract the required columns
+            mcsTable = mcsTable(:, ["Qm","TargetCodeRate","SpectralEfficiency"]);
+            % Convert table to 2-D array for performance optimization
+            mcsTable = table2array(mcsTable);
+            % Replace NaN values with 0
+            mcsTable(isnan(mcsTable)) = 0;
+            % Multiply target code rate by 1024 to get code rate
+            mcsTable(:,2) = mcsTable(:,2).*1024;
+        end
+
+        function cqiTable = getCQITable()
+            %getCQITable Returns the CQI table as per TS 38.214 - Section 5.2.2.1-3
+            %This table is used to indicate channel quality for DL direction.
+            % Modulation CodeRate Efficiency
+
+            cqiTables = nrCQITables;
+            cqiTable = cqiTables.CQITable2;
+
+            % Extract the required columns
+            cqiTable = cqiTable(:, ["Qm","TargetCodeRate","SpectralEfficiency"]);
+            % Convert table to 2-D array for performance optimization
+            cqiTable = table2array(cqiTable);
+            % Replace NaN values with 0
+            cqiTable(isnan(cqiTable)) = 0;
+            % Multiply target code rate by 1024 to get code rate
+            cqiTable(:,2) = cqiTable(:,2).*1024;
         end
     end
 end

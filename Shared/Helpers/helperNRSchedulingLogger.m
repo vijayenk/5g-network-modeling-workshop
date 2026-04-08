@@ -1,27 +1,26 @@
 classdef helperNRSchedulingLogger < handle
     %helperNRSchedulingLogger Scheduler logging mechanism
     %   The class implements logging mechanism. The following types of
-    %   informations is logged:
+    %   information is logged:
     %   - Logs of CQI values for UEs over the bandwidth
     %   - Logs of resource grid assignment to UEs
     %
     %   helperNRSchedulingLogger Name-Value pairs:
     %
-    %   LinkDirection     - Flag to indicate the link direction associated to
-    %                       the plots to visualize
+    %   LinkDirection     - Indicate the link direction in which logging is performed
 
-    %   Copyright 2022-2024 The MathWorks, Inc.
+    %   Copyright 2022-2026 The MathWorks, Inc.
 
     properties
         %NCellID Cell ID to which the logging and visualization object belongs
-        NCellID (1, 1) {mustBeInteger, mustBeInRange(NCellID, 0, 1007)} = 1;
+        NCellID (1, 1) {mustBeInteger, mustBeBetween(NCellID, 0, 1007)} = 1;
 
         %NumUEs Count of UEs
-        NumUEs
+        NumUEs = 0
 
         %NumHARQ Number of HARQ processes
         % The default value is 16 HARQ processes
-        NumHARQ (1, 1) {mustBeInteger, mustBeInRange(NumHARQ, 1, 16)} = 16;
+        NumHARQ (1, 1) {mustBeInteger, mustBeBetween(NumHARQ, 1, 16)} = 16;
 
         %NumFrames Number of frames in simulation
         NumFrames
@@ -38,7 +37,7 @@ classdef helperNRSchedulingLogger < handle
 
         %ResourceAllocationType Type for Resource allocation type (RAT)
         % Value 0 means RAT-0 and value 1 means RAT-1. The default value is 1
-        ResourceAllocationType (1, 1) {mustBeInteger, mustBeInRange(ResourceAllocationType, 0, 1)} = 1;
+        ResourceAllocationType (1, 1) {mustBeInteger, mustBeBetween(ResourceAllocationType, 0, 1)} = 1;
 
         %ColumnIndexMap Mapping the column names of logs to respective column indices
         % It is a map object
@@ -95,11 +94,10 @@ classdef helperNRSchedulingLogger < handle
         %TraceIndexCounter Current log index
         TraceIndexCounter = 0;
 
-        % LinkDirection indicates the directions in which logging is performed. It takes
-        % values 0, 1, and 2, which correspond to logging downlink, uplink, and both
-        % link directions, respectively. By default, the value is set to 2, indicating
-        % that logs are recorded for both directions.
-        LinkDirection = 2;
+        % LinkDirection indicates the directions in which logging is performed. It
+        % takes values "DL","UL" and "Both". By default, the value is set to
+        % "Both", indicating that logs are recorded for both directions.
+        LinkDirection = "Both";
     end
 
     properties (SetAccess = private)
@@ -115,9 +113,11 @@ classdef helperNRSchedulingLogger < handle
         UEs nrUE
     end
 
-    properties (WeakHandle, Access=private)
-        %NetworkSimulator Simulator handle object
-        NetworkSimulator wirelessNetworkSimulator
+    properties (WeakHandle,Hidden,SetAccess=protected)
+        %NetworkSimulator Handle of the wirelessNetworkSimulator instance
+        % Can be set through N-V pair in the constructor. If not set, will be
+        % obtained by calling wirelessNetworkSimulator.getInstance().
+        NetworkSimulator wirelessNetworkSimulator {mustBeScalarOrEmpty}
     end
 
     properties (Constant)
@@ -266,6 +266,16 @@ classdef helperNRSchedulingLogger < handle
         %    CallBackFn - Call back to invoke when triggering the event
         %    TimeToInvoke - Time at which event has to be invoked
         Events = [];
+
+        %CarrierOfInterest Carrier index (w.r.t to the gNB) corresponding to which the
+        %scheduler logs will be shown
+        CarrierOfInterest = 1;
+
+        %NumDLULPatternSlots Number of slots in DL-UL pattern (for TDD mode)
+        NumDLULPatternSlots
+
+        %HasSpecialSlot Indicate the presence of special slot (for TDD mode)
+        HasSpecialSlot = 0;
     end
 
     methods
@@ -299,13 +309,16 @@ classdef helperNRSchedulingLogger < handle
 
             % Trace logging
             obj.GNB = gNB;
+            if isempty(UEs) % No UEs in the cell
+                return;
+            end
             obj.UEs = UEs;
             obj.NumSlotsFrame = (10 * gNB.SubcarrierSpacing) / 15e3; % Number of slots in a 10 ms frame
             slotDuration = (10/obj.NumSlotsFrame)*1e-3;
             % Symbol duration for the given numerology
             symbolDuration = 1e-3/(14*(gNB.SubcarrierSpacing/15e3)); % Assuming normal cyclic prefix
 
-            obj.NCellID = gNB.NCellID;
+            obj.NCellID = gNB.NCellID(1);
             obj.NumUEs = numel(obj.UEs);
             obj.UEIdList = 1:obj.NumUEs;
             obj.NumHARQ = gNB.NumHARQ;
@@ -345,6 +358,12 @@ classdef helperNRSchedulingLogger < handle
                 % Normalized scalar considering the uplink symbol allocation
                 % in the frame structure
                 scaleFactorUL = numULSymbols/numSymbols;
+
+                % Add 'NumDLULPatternSlots' and 'HasSpecialSlot' for optimization. To be used while updating the 'Signal Type'
+                obj.NumDLULPatternSlots = dlulConfig.DLULPeriodicity*(gNB.SubcarrierSpacing/15e3);
+                % Check if special slot is configured
+                totalSymbols = dlulConfig.NumDLSymbols + dlulConfig.NumULSymbols;
+                obj.HasSpecialSlot = totalSymbols > 0;
             else % FDD
                 obj.NumLogs = 2;
                 % Normalized scalars in the DL and UL directions are 1 for
@@ -374,7 +393,7 @@ classdef helperNRSchedulingLogger < handle
             % possible for each UE. The maximum layers possible for each UE
             % is min(gNBTxAnts, ueRxAnts)
             % Determine the plots
-            if obj.LinkDirection == 2
+            if obj.LinkDirection == "Both"
                 % Downlink & Uplink
                 obj.PlotIds = [obj.DownlinkIdx obj.UplinkIdx];
                 % Average of the peak DL transmitted values for each UE
@@ -383,7 +402,7 @@ classdef helperNRSchedulingLogger < handle
                 % Calculate uplink and downlink peak spectral efficiency
                 obj.PeakDLSpectralEfficiency = 1e6*obj.PeakDataRateDL/obj.Bandwidth(obj.DownlinkIdx);
                 obj.PeakULSpectralEfficiency = 1e6*obj.PeakDataRateUL/obj.Bandwidth(obj.UplinkIdx);
-            elseif obj.LinkDirection == 0 % Downlink
+            elseif obj.LinkDirection == "DL" % Downlink
                 obj.PlotIds = obj.DownlinkIdx;
                 obj.PeakDataRateDL = 1e-6*(sum(numLayersDL)/obj.NumUEs)*scaleFactorDL*8*(948/1024)*(obj.GNB.NumResourceBlocks*12)/symbolDuration;
                 % Calculate downlink peak spectral efficiency
@@ -418,7 +437,7 @@ classdef helperNRSchedulingLogger < handle
                     logIdx = idx; % TDD
                 end
                 % Construct the log format
-                obj.SchedulingLog{logIdx} = constructLogFormat(obj, logIdx);
+                obj.SchedulingLog{logIdx} = constructSchedulingLogFormat(obj, logIdx);
             end
 
             % Construct the grant log format
@@ -492,16 +511,27 @@ classdef helperNRSchedulingLogger < handle
             data = eventData.Data;
             currFrame = data.TimingInfo(1);
             currSlot = data.TimingInfo(2);
-            currSymbol = data.TimingInfo(3);
-            symbolNumSimulation = (currFrame * obj.NumSlotsFrame + currSlot) * obj.NumSym + currSymbol;
-            if ~isempty(data.SINR)
-                if isa(eventData.Source, 'nrUE')
-                    obj.SchedulingLog{linkIndex}{symbolNumSimulation+1, obj.ColumnIndexMap('SINR')}(eventData.Source.RNTI, 1) = data.SINR;
-                else
-                    obj.SchedulingLog{linkIndex}{symbolNumSimulation+1, obj.ColumnIndexMap('SINR')}(data.RNTI, 1) = data.SINR;
-                end
-                obj.SchedulingLog{linkIndex}{symbolNumSimulation+1, obj.ColumnIndexMap('Signal Type')}(data.RNTI, 1) = data.SignalType;
+            symbolNumSimulation = (currFrame * obj.NumSlotsFrame + currSlot) * obj.NumSym;
+            rowIdx = symbolNumSimulation + 1;
+            rntiIdx = data.RNTI;
+            % Store the required column index for 'Signal Type'
+            sigTypeCol = obj.ColumnIndexMap('Signal Type');
+
+            if ~isinf(data.SINR)
+                % Log SINR corresponding to the data transmission
+                obj.SchedulingLog{linkIndex}{rowIdx, obj.ColumnIndexMap('SINR')}(rntiIdx) = data.SINR;
             end
+
+            % Get the current SignalType for the RNTI and symbol
+            currSignalType = obj.SchedulingLog{linkIndex}{rowIdx, sigTypeCol}(rntiIdx);
+            if currSignalType == ""
+                % If empty, log the new Signal Type
+                signalTypeVal = data.SignalType;
+            else % If already present, append new Signal Type (separated by '+')
+                signalTypeVal = currSignalType + "+" + data.SignalType;
+            end
+            % Update SchedulingLog
+            obj.SchedulingLog{linkIndex}{rowIdx, sigTypeCol}(rntiIdx) = signalTypeVal;
         end
 
         function [dlMetrics, ulMetrics, cellMetrics] = getMACMetrics(obj, firstSlot, lastSlot, rntiList)
@@ -557,6 +587,14 @@ classdef helperNRSchedulingLogger < handle
             macTxStep = zeros(obj.NumUEs, 2);
             bufferStatus = zeros(obj.NumUEs, 2);
 
+            % Store column index maps in variables and reuse in
+            % calculations
+            columnIndexMap = obj.ColumnIndexMap;
+            freqAllocation = columnIndexMap('Frequency Allocation');
+            txBytes = columnIndexMap('Transmitted Bytes');
+            bufferStatusUEs = columnIndexMap('Buffer Status of UEs');
+            linktype = columnIndexMap('Tx Type');
+
             % Update the DL and UL metrics properties
             for idx = 1:min(obj.NumLogs, numel(obj.PlotIds))
                 plotId = obj.PlotIds(idx);
@@ -574,11 +612,11 @@ classdef helperNRSchedulingLogger < handle
                 % properties
                 for i = stepLogStartIdx:obj.StepSize:stepLogEndIdx
                     slotLog = obj.SchedulingLog{schedLogIdx}(i, :);
-                    frequencyAssignment = slotLog{obj.ColumnIndexMap('Frequency Allocation')};
-                    transmittedBytes = slotLog{obj.ColumnIndexMap('Transmitted Bytes')};
-                    ueBufferStatus = slotLog{obj.ColumnIndexMap('Buffer Status of UEs')};
+                    frequencyAssignment = slotLog{freqAllocation};
+                    transmittedBytes = slotLog{txBytes};
+                    ueBufferStatus = slotLog{bufferStatusUEs};
                     if(obj.DuplexMode == obj.TDDDuplexMode)
-                        switch (slotLog{obj.ColumnIndexMap('Tx Type')})
+                        switch (slotLog{linktype})
                             case 'UL'
                                 linkIdx = 2; % Uplink information index
                                 numULSyms = numULSyms + 1;
@@ -640,8 +678,8 @@ classdef helperNRSchedulingLogger < handle
             cellMetrics.DLRBsScheduled = sum(assignedRBsStep(:, obj.DownlinkIdx));
         end
 
-        function [resourceGrid, resourceGridReTxInfo, resourceGridHarqInfo, varargout] = getRBGridsInfo(obj, frameNumber, slotNumber)
-            %plotRBGrids Return the resource grid information
+        function [resourceGridInfo, varargout] = getRBGridsInfo(obj, frameNumber, slotNumber)
+            %getRBGridsInfo Return the resource grid information
             %
             % getRBGridsInfo(OBJ, FRAMENUMBER, SLOTNUMBER) Return the resource grid status
             %
@@ -649,39 +687,42 @@ classdef helperNRSchedulingLogger < handle
             %
             % SLOTNUMBER - Slot number
             %
-            % RESOURCEGRID In FDD mode first element contains downlink
-            % resource grid allocation status and second element contains uplink
-            % resource grid allocation status. In TDD mode first element
-            % contains resource grid allocation status for downlink and uplink.
-            % Each element is a 2D resource grid of N-by-P matrix where 'N' is
-            % the number of slot or symbols and 'P' is the number of RBs in the
-            % bandwidth to store how UEs are assigned different time-frequency
-            % resources.
-            %
-            % RESOURCEGRIDHARQINFO In FDD mode first element contains
-            % downlink HARQ information and second element contains uplink
-            % HARQ information. In TDD mode first element contains HARQ
-            % information for downlink and uplink. Each element is a 2D
-            % resource grid of N-by-P matrix where 'N' is the number of
-            % slot or symbols and 'P' is the number of RBs in the bandwidth
-            % to store the HARQ process
-            %
-            % RESOURCEGRIDRETXINFO First element contains transmission
-            % status in downlink and second element contains transmission
-            % status in uplink for FDD mode. In TDD mode first element
-            % contains transmission status for both downlink and uplink.
-            % Each element is a 2D resource grid of N-by-P matrix where 'N'
-            % is the number of slot or symbols and 'P' is the number of RBs
-            % in the bandwidth to store type:new-transmission or
-            % retransmission.
+            % RESOURCEGRIDINFO a 2x1 struct array containing resource grid
+            % information for DL and UL. In FDD mode, the first element
+            % contains DL resource grid information, and the second element
+            % contains UL resource grid information. In TDD mode, the first
+            % element contains resource grid information for both DL and
+            % UL, and the second element is unused. Each element is a
+            % struct with the following fields:
+            %   - UEAssignment: A 2D cell array of size N-by-P, storing how
+            %     UEs are assigned different time-frequency resources.
+            %   - TxType: A 2D cell array of size N-by-P,
+            %     storing transmission status (new-transmission or
+            %     retransmission).
+            %   - HarqID: A 2D cell array of size N-by-P,
+            %     storing the HARQ process identifiers.
+            % Dimension definitions:
+            %     N: Number of slots (for slot-based scheduling) or symbols
+            %     (for symbol-based scheduling)
+            %     P: Number of RBs in the bandwidth
 
-            resourceGrid = cell(2, 1);
-            resourceGridReTxInfo = cell(2, 1);
-            resourceGridHarqInfo = cell(2, 1);
-            if obj.SchedulingType % Symbol based scheduling
+            % Initialize struct array
+            if obj.SchedulingType % Symbol-based scheduling
+                numRows = obj.NumSym;
+            else % Slot-based scheduling
+                numRows = obj.NumSlotsFrame;
+            end
+            resourceGridInfo = struct(...
+                'UEAssignment', {cell(numRows, obj.NumRBs(1)); cell(numRows, obj.NumRBs(2))}, ...
+                'TxType', {cell(numRows, obj.NumRBs(1)); cell(numRows, obj.NumRBs(2))}, ...
+                'HarqID', {cell(numRows, obj.NumRBs(1)); cell(numRows, obj.NumRBs(2))} ...
+                );
+
+            % Determine log indices for scheduling
+            if obj.SchedulingType % Symbol-based scheduling
                 frameLogStartIdx = (frameNumber * obj.NumSlotsFrame * obj.LogInterval) + (slotNumber * obj.LogInterval);
                 frameLogEndIdx = frameLogStartIdx + obj.LogInterval;
-            else % Slot based scheduling
+            else % Slot-based scheduling
                 frameLogStartIdx = frameNumber * obj.NumSlotsFrame * obj.LogInterval;
                 frameLogEndIdx = frameLogStartIdx + (obj.NumSlotsFrame * obj.LogInterval);
             end
@@ -695,28 +736,31 @@ classdef helperNRSchedulingLogger < handle
                     logIdx = 1;
                     symSlotInfo = cell(14,1);
                 end
-
+                
                 % Reset the resource grid status
-                if obj.SchedulingType % Symbol based scheduling
-                    numRows = obj.NumSym;
-                else % Slot based scheduling
-                    numRows = obj.NumSlotsFrame;
-                end
-                emptyGrid = zeros(numRows, obj.NumRBs(logIdx));
-                resourceGrid{logIdx} = emptyGrid;
-                resourceGridReTxInfo{logIdx} = emptyGrid;
-                resourceGridHarqInfo{logIdx} = emptyGrid;
+                emptyGrid = cell(numRows, obj.NumRBs(logIdx));
+                resourceGridInfo(logIdx).UEAssignment = emptyGrid;
+                resourceGridInfo(logIdx).TxType = emptyGrid;
+                resourceGridInfo(logIdx).HarqID = emptyGrid;
+                                
+                % Store column index maps in variables and reuse in
+                % calculations
+                columnIndexMap = obj.ColumnIndexMap;
+                freqAllocation = columnIndexMap('Frequency Allocation');
+                harqProcess = columnIndexMap('HARQ Process');
+                linkType = columnIndexMap('Tx Type');
 
                 slIdx = 0; % Counter to keep track of the number of symbols/slots to be plotted
                 for i = frameLogStartIdx+1:obj.StepSize:frameLogEndIdx % For each symbol in the slot or each slot in the frame
                     slIdx = slIdx + 1;
                     slotLog = obj.SchedulingLog{logIdx}(i, :);
-                    frequencyAssignment = slotLog{obj.ColumnIndexMap('Frequency Allocation')};
-                    harqIds = slotLog{obj.ColumnIndexMap('HARQ Process')};
-                    txType = slotLog{obj.ColumnIndexMap('Tx Type')};
+                    
+                    frequencyAssignment = slotLog{freqAllocation};
+                    harqIds = slotLog{harqProcess};
+                    txType = slotLog{linkType};
                     % Symbol or slot information
                     if obj.DuplexMode == obj.TDDDuplexMode
-                        symSlotInfo{slIdx} = slotLog{obj.ColumnIndexMap('Type')};
+                        symSlotInfo{slIdx} = slotLog{columnIndexMap('Type')};
                     end
                     for j = 1 : obj.NumUEs % For each UE
                         if (strcmp(txType(j), 'newTx') || strcmp(txType(j), 'newTx-Start') || strcmp(txType(j), 'newTx-InProgress') || strcmp(txType(j), 'newTx-End'))
@@ -731,23 +775,45 @@ classdef helperNRSchedulingLogger < handle
                             frequencyAllocation = frequencyAssignment(j, :);
                             startRBIndex = frequencyAllocation(1);
                             numRB = frequencyAllocation(2);
-                            resourceGrid{logIdx}(slIdx, startRBIndex+1 : startRBIndex+numRB) = j;
-                            resourceGridReTxInfo{logIdx}(slIdx, startRBIndex+1 : startRBIndex+numRB) = type;
-                            resourceGridHarqInfo{logIdx}(slIdx, startRBIndex+1 : startRBIndex+numRB) = harqIds(j);
+                            % Define the range of resource block indices
+                            rbIndices = startRBIndex+1 : startRBIndex+numRB;
+                            % Extract current contents
+                            gridSlice = resourceGridInfo(logIdx).UEAssignment(slIdx, rbIndices);
+                            reTxSlice = resourceGridInfo(logIdx).TxType(slIdx, rbIndices);
+                            harqSlice = resourceGridInfo(logIdx).HarqID(slIdx, rbIndices);
+                            % Append new values using cellfun
+                            newGrid = cellfun(@(x) [x, j], gridSlice, 'UniformOutput', false);
+                            newReTx = cellfun(@(x) [x, type], reTxSlice, 'UniformOutput', false);
+                            newHarq = cellfun(@(x) [x, harqIds(j)], harqSlice, 'UniformOutput', false);
+                            % Assign back to cell arrays
+                            [resourceGridInfo(logIdx).UEAssignment{slIdx, rbIndices}] = deal(newGrid{:});
+                            [resourceGridInfo(logIdx).TxType{slIdx, rbIndices}] = deal(newReTx{:});
+                            [resourceGridInfo(logIdx).HarqID{slIdx, rbIndices}] = deal(newHarq{:});
                         else % RAT-0
                             RBGAllocationBitmap = frequencyAssignment(j, :);
                             for k=1:numel(RBGAllocationBitmap) % For all RBGs
                                 if(RBGAllocationBitmap(k) == 1)
+                                    % Calculate start and end RB indices
                                     startRBIndex = (k - 1) * obj.RBGSize(plotId) + 1;
                                     endRBIndex = k * obj.RBGSize(plotId);
-                                    if(k == length(RBGAllocationBitmap) && (mod(obj.NumRBs(plotId), obj.RBGSize(plotId)) ~=0))
-                                        % If it is last RBG and it does not
-                                        % have same number of RBs as other RBGs
+                                    if k == numel(RBGAllocationBitmap) && mod(obj.NumRBs(plotId), obj.RBGSize(plotId)) ~= 0
+                                        % If it is the last RBG and it does not have the same number of RBs as other RBGs
                                         endRBIndex = (k - 1) * obj.RBGSize(plotId) + mod(obj.NumRBs(plotId), obj.RBGSize(plotId));
                                     end
-                                    resourceGrid{logIdx}(slIdx, startRBIndex : endRBIndex) = j;
-                                    resourceGridReTxInfo{logIdx}(slIdx, startRBIndex : endRBIndex) = type;
-                                    resourceGridHarqInfo{logIdx}(slIdx, startRBIndex : endRBIndex) = harqIds(j);
+                                    % Define the range of resource block indices
+                                    rbIndices = startRBIndex:endRBIndex;
+                                    % Extract current contents
+                                    gridSlice = resourceGridInfo(logIdx).UEAssignment(slIdx, rbIndices);
+                                    reTxSlice = resourceGridInfo(logIdx).TxType(slIdx, rbIndices);
+                                    harqSlice = resourceGridInfo(logIdx).HarqID(slIdx, rbIndices);
+                                    % Append new values using cellfun
+                                    newGrid = cellfun(@(x) [x, j], gridSlice, 'UniformOutput', false);
+                                    newReTx = cellfun(@(x) [x, type], reTxSlice, 'UniformOutput', false);
+                                    newHarq = cellfun(@(x) [x, harqIds(j)], harqSlice, 'UniformOutput', false);
+                                    % Assign back to cell arrays
+                                    [resourceGridInfo(logIdx).UEAssignment{slIdx, rbIndices}] = deal(newGrid{:});
+                                    [resourceGridInfo(logIdx).TxType{slIdx, rbIndices}] = deal(newReTx{:});
+                                    [resourceGridInfo(logIdx).HarqID{slIdx, rbIndices}] = deal(newHarq{:});
                                 end
                             end
                         end
@@ -759,49 +825,171 @@ classdef helperNRSchedulingLogger < handle
             end
         end
 
-        function dlCQIInfo = getCQIRBGridsInfo(obj, frameNumber, slotNumber)
-            %getCQIRBGridsInfo Return channel quality information
+        function [dlMCSInfo, ulMCSInfo] = getMCSRBGridsInfo(obj, frameNumber, slotNumber)
+            %getMCSRBGridsInfo Return MCS information
             %
-            % getCQIRBGridsInfo(OBJ, FRAMENUMBER, SLOTNUMBER) Return
-            % resource grid channel quality information
+            % getMCSRBGridsInfo(OBJ, FRAMENUMBER, SLOTNUMBER) Return
+            % resource grid MCS information
             %
             % FRAMENUMBER - Frame number
             %
             % SLOTNUMBER - Slot number
             %
-            % DLCQIINFO - Downlink channel quality information
+            % DLMCSINFO - Downlink MCS information
+            %
+            % ULMCSINFO - Uplink MCS information
 
+            mcsInfo = cell(2, 1);
             lwRowIndex = frameNumber * obj.NumSlotsFrame * obj.LogInterval;
-            if obj.SchedulingType % Symbol based scheduling
+            if obj.SchedulingType % Symbol-based scheduling
                 upRowIndex = lwRowIndex + (slotNumber + 1) * obj.LogInterval;
-            else % Slot based scheduling
+            else % Slot-based scheduling
                 upRowIndex = lwRowIndex + (slotNumber * obj.LogInterval) + 1;
             end
 
-            plotId = obj.DownlinkIdx;
             if (obj.DuplexMode == obj.TDDDuplexMode) % TDD
-                % Get the symbols types in the current frame
-                symbolTypeInFrame = {obj.SchedulingLog{1}(lwRowIndex+1:upRowIndex, obj.ColumnIndexMap('Type'))};
-                cqiInfo = zeros(obj.NumUEs, obj.NumRBs(plotId));
-                % Get the DL symbol indices
-                dlIdx = find(strcmp(symbolTypeInFrame{1}, 'DL'));
-                if ~isempty(dlIdx)
-                    cqiValues = zeros(obj.NumUEs, obj.NumRBs(1));
-                    for ueIdx = 1:obj.NumUEs
-                        cqiValues(ueIdx, :) = obj.SchedulingLog{1}{lwRowIndex + dlIdx(end), obj.ColumnIndexMap('Channel Quality')}{ueIdx}.CQI;
+                if ~isempty(obj.SchedulingLog{obj.DownlinkIdx})
+                    % Get the symbols types in the current frame
+                    symbolTypeInFrame = obj.SchedulingLog{1}(lwRowIndex+1:upRowIndex, obj.ColumnIndexMap('Type'));
+
+                    % Initialize MCS info
+                    mcsInfo{obj.DownlinkIdx} = -1*ones(obj.NumUEs, obj.NumRBs(obj.DownlinkIdx));
+                    mcsInfo{obj.UplinkIdx} = -1*ones(obj.NumUEs, obj.NumRBs(obj.UplinkIdx));
+
+                    if obj.SchedulingType % Symbol-based scheduling
+                        % Find the last DL and UL symbols in the frame
+                        dlIdx = find(strcmp(symbolTypeInFrame, 'DL'), 1, 'last');
+                        ulIdx = find(strcmp(symbolTypeInFrame, 'UL'), 1, 'last');
+                        % Assign MCS for the last DL/UL symbols
+                        if ~isempty(dlIdx)
+                            mcsInfo{obj.DownlinkIdx} = assignMCSInfo(obj, obj.DownlinkIdx, lwRowIndex+dlIdx);
+                        end
+                        if ~isempty(ulIdx) && ~isempty(obj.SchedulingLog{obj.UplinkIdx})
+                            mcsInfo{obj.UplinkIdx} = assignMCSInfo(obj, obj.DownlinkIdx, lwRowIndex+ulIdx);
+                        end
+                    else % Slot-based scheduling
+                        % Find first symbols of all slots
+                        slotFirstSymIdx = 1:obj.NumSym:numel(symbolTypeInFrame);
+                        slotTypes = symbolTypeInFrame(slotFirstSymIdx);
+
+                        % Find the latest slots where the first symbol is DL or UL
+                        dlSlotIdx = find(strcmp(slotTypes, 'DL'), 1, 'last');
+                        ulSlotIdx = find(strcmp(slotTypes, 'UL'), 1, 'last');
+
+                        % Assign MCS from the first symbol of the latest DL/UL slots
+                        if ~isempty(dlSlotIdx)
+                            dlSymIdx = slotFirstSymIdx(dlSlotIdx);
+                            mcsInfo{obj.DownlinkIdx} = assignMCSInfo(obj, obj.DownlinkIdx, lwRowIndex+dlSymIdx);
+                        end
+                        if ~isempty(ulSlotIdx)
+                            ulSymIdx = slotFirstSymIdx(ulSlotIdx);
+                            mcsInfo{obj.UplinkIdx} = assignMCSInfo(obj, obj.DownlinkIdx, lwRowIndex+ulSymIdx);
+                        end
                     end
-                    % Update downlink channel quality based on latest DL
-                    % symbol/slot
-                    cqiInfo = cqiValues;
                 end
-            elseif obj.PlotIds(1) == plotId
-                cqiValues = zeros(obj.NumUEs, obj.NumRBs(plotId));
-                for ueIdx = 1:obj.NumUEs
-                    cqiValues(ueIdx, :) = obj.SchedulingLog{plotId}{upRowIndex, obj.ColumnIndexMap('Channel Quality')}{ueIdx}.CQI;
+            else
+                for idx=1:numel(obj.PlotIds)
+                    plotId = obj.PlotIds(idx);
+                    if ~isempty(obj.SchedulingLog{plotId})
+                        mcsInfo{plotId} = assignMCSInfo(obj, plotId, upRowIndex);
+                    end
                 end
-                cqiInfo = cqiValues;
             end
-            dlCQIInfo = cqiInfo;
+            dlMCSInfo = mcsInfo{obj.DownlinkIdx};
+            ulMCSInfo = mcsInfo{obj.UplinkIdx};
+        end
+
+        function mcsInfo = assignMCSInfo(obj, plotId, upRowIndex)
+            %assignMCSInfo Assigns MCS values to allocated RBs for a given plotId and upRowIndex
+
+            numRBs = obj.NumRBs(plotId);
+            mcsInfo = -1 * ones(obj.NumUEs, numRBs); % Initialize with -1
+
+            % Fetch MCS and frequency allocation
+            columnIndexMap = obj.ColumnIndexMap;
+            mcsValues = obj.SchedulingLog{plotId}{upRowIndex, columnIndexMap('MCS Index')}; % [NumUEs × 1]
+            freqAlloc = obj.SchedulingLog{plotId}{upRowIndex, columnIndexMap('Frequency Allocation')}; % [NumUEs × 2] for RAT1, [NumUEs × numRBG] for RAT0
+
+            if obj.ResourceAllocationType % RAT1: freqAlloc is [NumUEs × 2] with [startRB, numRBs]
+                % Extract RB ranges (handle 0-based indexing)
+                startRBs = freqAlloc(:, 1) + (freqAlloc(:, 1) >= 0); % Convert 0-based to 1-based
+                numRBsAllocated = freqAlloc(:, 2); % Number of RBs
+                allocatedUEs = numRBsAllocated > 0; % Identify allocated UEs
+
+                if ~any(allocatedUEs)
+                    return; % No allocated UEs; return -1 matrix
+                end
+
+                % Filter allocated UEs
+                startRBs = startRBs(allocatedUEs);
+                numRBsAllocated = numRBsAllocated(allocatedUEs);
+                mcsValues = mcsValues(allocatedUEs);
+                ueIndicesRaw = find(allocatedUEs); % UE indices (1 to NumUEs)
+                endRBs = startRBs + numRBsAllocated - 1; % Ending RB indices
+
+                % Generate indices for all allocated RBs
+                totalAllocatedRBs = sum(numRBsAllocated); % Total allocated RBs
+                ueIndices = zeros(totalAllocatedRBs, 1); % Preallocate UE indices
+                rbIndices = zeros(totalAllocatedRBs, 1); % Preallocate RB indices
+                offset = 0;
+                for i = 1:numel(ueIndicesRaw)
+                    count = numRBsAllocated(i);
+                    range = offset + (1:count);
+                    ueIndices(range) = ueIndicesRaw(i); % Assign UE index
+                    rbIndices(range) = startRBs(i):endRBs(i); % Assign RB positions
+                    offset = offset + count;
+                end
+                mcsValuesExpanded = repelem(mcsValues, numRBsAllocated); % MCS values for each RB
+            else % RAT0: freqAlloc is [NumUEs x numRBG] bitmap
+                numRBG = size(freqAlloc, 2);
+                allocatedUEs = any(freqAlloc, 2); % UEs with at least one RBG allocated
+
+                if ~any(allocatedUEs)
+                    return; % No allocated UEs; return -1 matrix
+                end
+
+                % Filter allocated UEs
+                freqAlloc = freqAlloc(allocatedUEs, :);
+                mcsValues = mcsValues(allocatedUEs);
+                ueIndicesRaw = find(allocatedUEs); % UE indices (1 to NumUEs)
+
+                % Compute RBG sizes (TR 38.214)
+                P = ceil(numRBs / numRBG);
+                numRBsPerRBG = P * ones(1, numRBG);
+                remainder = mod(numRBs, P);
+                if remainder > 0
+                    numRBsPerRBG(end) = remainder;
+                end
+
+                % Compute start and end RB indices for each RBG
+                startRBsRBG = [1, cumsum(numRBsPerRBG(1:end-1)) + 1]; % 1-based
+                endRBsRBG = cumsum(numRBsPerRBG); % Inclusive end RB
+
+                % Generate indices for all allocated RBs
+                totalAllocatedRBs = sum(freqAlloc * numRBsPerRBG'); % Total RBs across UEs
+                ueIndices = zeros(totalAllocatedRBs, 1); % Preallocate UE indices
+                rbIndices = zeros(totalAllocatedRBs, 1); % Preallocate RB indices
+                offset = 0;
+                for i = 1:numel(ueIndicesRaw)
+                    rbgMask = freqAlloc(i, :); % Bitmap for UE i
+                    if ~any(rbgMask)
+                        continue; % Skip if no RBGs allocated
+                    end
+                    numRBsUE = sum(rbgMask .* numRBsPerRBG); % Total RBs for UE
+                    range = offset + (1:numRBsUE);
+                    ueIndices(range) = ueIndicesRaw(i); % Assign UE index
+                    % Generate RB indices for allocated RBGs
+                    rbgIndices = find(rbgMask);
+                    rbRanges = arrayfun(@(j) startRBsRBG(j):endRBsRBG(j), rbgIndices, 'UniformOutput', false);
+                    rbIndices(range) = [rbRanges{:}]; % Concatenate RB ranges
+                    offset = offset + numRBsUE;
+                end
+                mcsValuesExpanded = repelem(mcsValues, sum(freqAlloc .* numRBsPerRBG, 2)); % MCS values for each RB
+            end
+
+            % Assign MCS to allocated RBs using linear indexing
+            linearIdx = sub2ind([obj.NumUEs, numRBs], ueIndices, rbIndices);
+            mcsInfo(linearIdx) = mcsValuesExpanded;
         end
 
         function logCellSchedulingStats(obj, ~, ~)
@@ -825,15 +1013,16 @@ classdef helperNRSchedulingLogger < handle
             gNBStatistics = gNB.statistics("all");
             % Read Tx bytes sent for each UE
             obj.UEMetricsDL(:, 1) = [gNBStatistics.MAC.Destinations.TransmittedBytes]';
-             obj.UEMetricsDL(:, 2) = statusInfo.BufferSize; % Read pending buffer (in bytes) on gNB, for all the UEs
+            obj.UEMetricsDL(:, 2) = statusInfo.BufferSize; % Read pending buffer (in bytes) on gNB, for all the UEs
 
+            % Read the NDI, DL and UL channel quality for the primary carrier for each of the UEs
             for ueIdx = 1:obj.NumUEs
-                obj.HARQProcessStatusUL(ueIdx, :) = obj.UEs(ueIdx).MACEntity.HARQNDIUL;
-                obj.HARQProcessStatusDL(ueIdx, :) = obj.UEs(ueIdx).MACEntity.HARQNDIDL;
+                obj.HARQProcessStatusUL(ueIdx, :) = obj.UEs(ueIdx).MACEntity.ComponentCarrier(1).HARQNDIUL;
+                obj.HARQProcessStatusDL(ueIdx, :) = obj.UEs(ueIdx).MACEntity.ComponentCarrier(1).HARQNDIDL;
                 % Read the UL channel quality at gNB for each of the UEs for logging
                 obj.UplinkChannelQuality{ueIdx} = statusInfo.ULChannelQuality(ueIdx); % 1 for UL
                 % Read the DL channel quality at UEs for logging
-                ueStatusInfo.DLChannelQuality = ueNode(ueIdx).MACEntity.CSIMeasurement;
+                ueStatusInfo.DLChannelQuality = ueNode(ueIdx).MACEntity.ComponentCarrier(1).CSIMeasurement;
                 ueStatusInfo.BufferSize = sum(ueNode(ueIdx).MACEntity.LCGBufferStatus);
                 ueStatistics = ueNode(ueIdx).statistics();
                 obj.DownlinkChannelQuality{ueIdx} = ueStatusInfo.DLChannelQuality; % 0 for DL
@@ -843,12 +1032,14 @@ classdef helperNRSchedulingLogger < handle
                 obj.UEMetricsUL(ueIdx, 2) = ueStatusInfo.BufferSize; % Read pending buffer (in bytes) on UE
             end
 
+            % Store the scheduling logs for the CarrierOfInterest at gNB
+            gNBCarrierIndex = obj.CarrierOfInterest;
             if obj.DuplexMode == 1 % TDD
                 % Get current symbol type: DL/UL/Guard
                 numSlots = floor((symbolNum-1)/14);
-                dlulSlotIndex = mod(numSlots, scheduler.CellConfig.NumDLULPatternSlots);
+                dlulSlotIndex = mod(numSlots, scheduler.CellConfig(gNBCarrierIndex).NumDLULPatternSlots);
                 symbolIndex = mod(symbolNum-1, 14);
-                symbolType = scheduler.CellConfig.DLULSlotFormat(dlulSlotIndex+1, symbolIndex+1);
+                symbolType = scheduler.CellConfig(gNBCarrierIndex).DLULSlotFormat(dlulSlotIndex+1, symbolIndex+1);
                 if(symbolType == 0 && linkDir ~= 1) % DL
                     metrics = obj.UEMetricsDL;
                     metrics(:, 1) = metrics(:, 1) - obj.PrevUEMetricsDL(:, 1);
@@ -860,7 +1051,7 @@ classdef helperNRSchedulingLogger < handle
                     obj.PrevUEMetricsUL = obj.UEMetricsUL;
                     logScheduling(obj, symbolNum, metrics, obj.UplinkChannelQuality, obj.HARQProcessStatusUL, symbolType);
                 else % Guard
-                    logScheduling(obj, symbolNum, zeros(obj.NumUEs, 3), zeros(obj.NumUEs, obj.NumRBs(1)), zeros(obj.NumUEs, 16), symbolType); % UL
+                    logScheduling(obj, symbolNum, zeros(obj.NumUEs, 3), cell(obj.NumUEs, 0), zeros(obj.NumUEs, 16), symbolType);
                 end
             else
                 % Store the scheduling logs
@@ -958,13 +1149,13 @@ classdef helperNRSchedulingLogger < handle
                     case 2
                         symbolTypeDesc = 'Guard';
                 end
-                obj.SchedulingLog{linkIndex}{symbolNumSimulation, obj.ColumnIndexMap('Type')} = symbolTypeDesc;
+                obj.SchedulingLog{linkIndex}{symbolNumSimulation, columnMap('Type')} = symbolTypeDesc;
             end
 
-            obj.SchedulingLog{linkIndex}{symbolNumSimulation, obj.ColumnIndexMap('Channel Quality')} = UECQIs;
-            obj.SchedulingLog{linkIndex}{symbolNumSimulation, obj.ColumnIndexMap('HARQ NDI Status')} = HarqProcessStatus;
-            obj.SchedulingLog{linkIndex}{symbolNumSimulation, obj.ColumnIndexMap('Transmitted Bytes')} = UEMetrics(:, 1); % Transmitted bytes sent by UEs
-            obj.SchedulingLog{linkIndex}{symbolNumSimulation, obj.ColumnIndexMap('Buffer Status of UEs')} = UEMetrics(:, 2); % Current buffer status of UEs in bytes
+            obj.SchedulingLog{linkIndex}{symbolNumSimulation, columnMap('Channel Quality')} = UECQIs;
+            obj.SchedulingLog{linkIndex}{symbolNumSimulation, columnMap('HARQ NDI Status')} = HarqProcessStatus;
+            obj.SchedulingLog{linkIndex}{symbolNumSimulation, columnMap('Transmitted Bytes')} = UEMetrics(:, 1); % Transmitted bytes sent by UEs
+            obj.SchedulingLog{linkIndex}{symbolNumSimulation, columnMap('Buffer Status of UEs')} = UEMetrics(:, 2); % Current buffer status of UEs in bytes
         end
 
         function logSchedulingGrants(obj, ~, eventData)
@@ -991,7 +1182,7 @@ classdef helperNRSchedulingLogger < handle
                 if(obj.DuplexMode == obj.TDDDuplexMode) % TDD
                     % Grant is received always in DL
                     linkIndex = 1;
-                    obj.SchedulingLog{linkIndex}{symbolNumSimulation+1, obj.ColumnIndexMap('Type')} = 'DL';
+                    obj.SchedulingLog{linkIndex}{symbolNumSimulation+1, columnMap('Type')} = 'DL';
                 else
                     % Depending on PlotIds linkIndex will be set
                     if isscalar(obj.PlotIds)
@@ -1004,67 +1195,70 @@ classdef helperNRSchedulingLogger < handle
                 end
                 resourceAssignments = grantList{grantIdx};
                 for j = 1:numel(resourceAssignments)
-                    % Fill logs w.r.t. each assignment
-                    assignment = resourceAssignments(j);
-                    % Calculate row number in the logs, for the Tx start
-                    % symbol
-                    logIndex = (currFrame * obj.NumSlotsFrame * obj.NumSym) +  ...
-                        ((currSlot + assignment.SlotOffset) * obj.NumSym) + assignment.StartSymbol + 1;
+                    % Store logs only for the CarrierOfInterest. First carrier, by default
+                    if obj.CarrierOfInterest == resourceAssignments(j).GNBCarrierIndex
+                        % Fill logs w.r.t. each assignment
+                        assignment = resourceAssignments(j);
+                        % Calculate row number in the logs, for the Tx start
+                        % symbol
+                        logIndex = (currFrame * obj.NumSlotsFrame * obj.NumSym) +  ...
+                            ((currSlot + assignment.SlotOffset) * obj.NumSym) + assignment.StartSymbol + 1;
 
-                    allottedUE = assignment.RNTI;
+                        allottedUE = assignment.RNTI;
 
-                    % Fill the start Tx symbol logs
-                    obj.SchedulingLog{linkIndex}{logIndex, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
-                    obj.SchedulingLog{linkIndex}{logIndex, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
-                    obj.SchedulingLog{linkIndex}{logIndex, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
-                    obj.SchedulingLog{linkIndex}{logIndex, columnMap('NDI')}(allottedUE) = assignment.NDI;
-                    if obj.SchedulingType % Symbol based scheduling
-                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-Start']};
-                        % Fill the logs from the symbol after Tx start, up to
-                        % the symbol before Tx end
-                        for k = 1:assignment.NumSymbols-2
-                            obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
-                            obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
-                            obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
-                            obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('NDI')}(allottedUE) = assignment.NDI;
-                            obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-InProgress']};
+                        % Fill the start Tx symbol logs
+                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
+                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
+                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
+                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('NDI')}(allottedUE) = assignment.NDI;
+                        if obj.SchedulingType % Symbol based scheduling
+                            obj.SchedulingLog{linkIndex}{logIndex, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-Start']};
+                            % Fill the logs from the symbol after Tx start, up to
+                            % the symbol before Tx end
+                            for k = 1:assignment.NumSymbols-2
+                                obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
+                                obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
+                                obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
+                                obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('NDI')}(allottedUE) = assignment.NDI;
+                                obj.SchedulingLog{linkIndex}{logIndex + k, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-InProgress']};
+                            end
+
+                            % Fill the last Tx symbol logs
+                            obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
+                            obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
+                            obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
+                            obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('NDI')}(allottedUE) = assignment.NDI;
+                            obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-End']};
+                        else % Slot based scheduling
+                            obj.SchedulingLog{linkIndex}{logIndex, columnMap('Tx Type')}(allottedUE) = {assignment.Type};
                         end
-
-                        % Fill the last Tx symbol logs
-                        obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('Frequency Allocation')}(allottedUE, :) = assignment.FrequencyAllocation;
-                        obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('MCS Index')}(allottedUE) = assignment.MCSIndex;
-                        obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('HARQ Process')}(allottedUE) = assignment.HARQID;
-                        obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('NDI')}(allottedUE) = assignment.NDI;
-                        obj.SchedulingLog{linkIndex}{logIndex + assignment.NumSymbols -1, columnMap('Tx Type')}(allottedUE) = {[assignment.Type, '-End']};
-                    else % Slot based scheduling
-                        obj.SchedulingLog{linkIndex}{logIndex, columnMap('Tx Type')}(allottedUE) = {assignment.Type};
-                    end
-                    obj.GrantCount  = obj.GrantCount + 1;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('RNTI')} = assignment.RNTI;
-                    slotNumGrant = mod(currSlot + assignment.SlotOffset, obj.NumSlotsFrame);
-                    if(currSlot + assignment.SlotOffset >= obj.NumSlotsFrame)
-                        frameNumGrant = currFrame + 1; % Assignment is for a slot in next frame
-                    else
-                        frameNumGrant = currFrame;
-                    end
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Frame')} = frameNumGrant;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Slot')} = slotNumGrant;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Frequency Allocation')} = assignment.FrequencyAllocation;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Start Symbol')} = assignment.StartSymbol;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Num Symbols')} = assignment.NumSymbols;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('MCS Index')} = assignment.MCSIndex;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('NumLayers')} = assignment.NumLayers;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('HARQ Process')} = assignment.HARQID;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('NDI')} = assignment.NDI;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('RV')} = assignment.RV;
-                    obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Tx Type')} = assignment.Type;
-                    if(isfield(assignment, 'FeedbackSlotOffset'))
-                        % DL grant
-                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Feedback Slot Offset (DL grants only)')} = assignment.FeedbackSlotOffset;
-                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Grant Type')} = 'DL';
-                    else
-                        % UL Grant
-                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Grant Type')} = 'UL';
+                        obj.GrantCount  = obj.GrantCount + 1;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('RNTI')} = assignment.RNTI;
+                        slotNumGrant = mod(currSlot + assignment.SlotOffset, obj.NumSlotsFrame);
+                        if(currSlot + assignment.SlotOffset >= obj.NumSlotsFrame)
+                            frameNumGrant = currFrame + 1; % Assignment is for a slot in next frame
+                        else
+                            frameNumGrant = currFrame;
+                        end
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Frame')} = frameNumGrant;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Slot')} = slotNumGrant;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Frequency Allocation')} = assignment.FrequencyAllocation;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Start Symbol')} = assignment.StartSymbol;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Num Symbols')} = assignment.NumSymbols;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('MCS Index')} = assignment.MCSIndex;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('NumLayers')} = assignment.NumLayers;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('HARQ Process')} = assignment.HARQID;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('NDI')} = assignment.NDI;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('RV')} = assignment.RV;
+                        obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Tx Type')} = assignment.Type;
+                        if(isfield(assignment, 'FeedbackSlotOffset'))
+                            % DL grant
+                            obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Feedback Slot Offset (DL grants only)')} = assignment.FeedbackSlotOffset;
+                            obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Grant Type')} = 'DL';
+                        else
+                            % UL Grant
+                            obj.GrantLog{obj.GrantCount, grantLogsColumnIndexMap('Grant Type')} = 'UL';
+                        end
                     end
                 end
             end
@@ -1074,6 +1268,10 @@ classdef helperNRSchedulingLogger < handle
             %getSchedulingLogs Get the per-symbol logs of the whole simulation
 
             % Get keys of columns (i.e. column names) in sorted order of values (i.e. column indices)
+            if obj.NumUEs == 0
+                varargout = {[],[]};
+                return;
+            end
             [~, idx] = sort(cell2mat(values(obj.ColumnIndexMap)));
             columnTitles = keys(obj.ColumnIndexMap);
             columnTitles = columnTitles(idx);
@@ -1093,8 +1291,21 @@ classdef helperNRSchedulingLogger < handle
                     % Slot based scheduling
                     finalLogIndex = (obj.CurrFrame)*obj.NumSlotsFrame*obj.NumSym + (obj.CurrSlot+1)*obj.NumSym;
                     obj.SchedulingLog{logIdx} = obj.SchedulingLog{logIdx}(1:finalLogIndex, :);
-                    % For slot based scheduling: keep 1 row per slot and eliminate symbol number as a column title
-                    varargout{logIdx} = [columnTitles; obj.SchedulingLog{logIdx}(1:obj.NumSym:finalLogIndex, :)];
+                    % For slot based scheduling: keep 1 row per slot
+                    finalLog = obj.SchedulingLog{logIdx}(1:obj.NumSym:finalLogIndex, :);
+
+                    if obj.HasSpecialSlot % If there is a special slot (for TDD mode)
+                        gNB = obj.GNB;
+                        dlulConfig = gNB.DLULConfigTDD;
+                        logSize = size(finalLog, 1);
+                        % Calculate the indices for special slots within the DL/UL pattern
+                        specialSlotIndicies = dlulConfig.NumDLSlots:obj.NumDLULPatternSlots:logSize;
+                        for idx = 1:numel(specialSlotIndicies)
+                            % Update the 'Type' column for each special slot
+                            finalLog{specialSlotIndicies(idx)+1, obj.ColumnIndexMap('Type')} = 'S';
+                        end
+                    end
+                    varargout{logIdx} = [columnTitles; finalLog];
                 end
             end
         end
@@ -1103,6 +1314,11 @@ classdef helperNRSchedulingLogger < handle
             %getGrantLogs Get the scheduling assignment logs of the whole simulation
 
             % Get keys of columns (i.e. column names) in sorted order of values (i.e. column indices)
+            % Get keys of columns (i.e. column names) in sorted order of values (i.e. column indices)
+            if obj.NumUEs == 0
+                logs = [];
+                return;
+            end
             [~, idx] = sort(cell2mat(values(obj.GrantLogsColumnIndexMap)));
             columnTitles = keys(obj.GrantLogsColumnIndexMap);
             columnTitles = columnTitles(idx);
@@ -1124,18 +1340,20 @@ classdef helperNRSchedulingLogger < handle
             %           achieved data rate, theoretical peak spectral
             %           efficiency, achieved spectral efficiency
 
+            transmittedBytes = obj.ColumnIndexMap('Transmitted Bytes');
             if obj.DuplexMode == obj.FDDDuplexMode
                 if ismember(obj.DownlinkIdx, obj.PlotIds)
-                    totalDLTxBytes = sum(cell2mat(obj.SchedulingLog{obj.DownlinkIdx}(:,  obj.ColumnIndexMap('Transmitted Bytes'))));
+                    totalDLTxBytes = sum(cell2mat(obj.SchedulingLog{obj.DownlinkIdx}(:,  transmittedBytes)));
                 end
                 if ismember(obj.UplinkIdx, obj.PlotIds)
-                    totalULTxBytes = sum(cell2mat(obj.SchedulingLog{obj.UplinkIdx}(:,  obj.ColumnIndexMap('Transmitted Bytes'))));
+                    totalULTxBytes = sum(cell2mat(obj.SchedulingLog{obj.UplinkIdx}(:,  transmittedBytes)));
                 end
             else
-                dlIdx = strcmp(obj.SchedulingLog{1}(:, obj.ColumnIndexMap('Type')), 'DL');
-                totalDLTxBytes = sum(cell2mat(obj.SchedulingLog{1}(dlIdx,  obj.ColumnIndexMap('Transmitted Bytes'))));
-                ulIdx = strcmp(obj.SchedulingLog{1}(:, obj.ColumnIndexMap('Type')), 'UL');
-                totalULTxBytes = sum(cell2mat(obj.SchedulingLog{1}(ulIdx,  obj.ColumnIndexMap('Transmitted Bytes'))));
+                linkType = obj.ColumnIndexMap('Type');
+                dlIdx = strcmp(obj.SchedulingLog{1}(:, linkType), 'DL');
+                totalDLTxBytes = sum(cell2mat(obj.SchedulingLog{1}(dlIdx,  transmittedBytes)));
+                ulIdx = strcmp(obj.SchedulingLog{1}(:, linkType), 'UL');
+                totalULTxBytes = sum(cell2mat(obj.SchedulingLog{1}(ulIdx,  transmittedBytes)));
             end
             dlStats = zeros(1,4);
             ulStats = zeros(1,4);
@@ -1188,8 +1406,8 @@ classdef helperNRSchedulingLogger < handle
             end
         end
 
-        function logFormat = constructLogFormat(obj, linkIdx)
-            %constructLogFormat Construct log format
+        function logFormat = constructSchedulingLogFormat(obj, linkIdx)
+            %constructSchedulingLogFormat Construct log format
 
             columnIndex = 1;
             logFormat{1, columnIndex} = 0; % Timestamp (in milliseconds)
@@ -1353,6 +1571,5 @@ classdef helperNRSchedulingLogger < handle
             end
             logFormat = repmat(logFormat(1,:), maxRows , 1);
         end
-
     end
 end

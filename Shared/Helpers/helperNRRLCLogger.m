@@ -3,7 +3,7 @@ classdef helperNRRLCLogger < handle
     %   The class implements per slot logging mechanism for RLC logical
     %   channels of the UEs. It is used to log the statistics per cell
 
-    %   Copyright 2023-2024 The MathWorks, Inc.
+    %   Copyright 2023-2025 The MathWorks, Inc.
 
     properties
         %NCellID Cell id to which the logging object belongs
@@ -123,7 +123,7 @@ classdef helperNRRLCLogger < handle
 
             networkSimulator = wirelessNetworkSimulator.getInstance();
             obj.GNB = gNB;
-            obj.NCellID = gNB.NCellID;
+            obj.NCellID = gNB.NCellID(1);
             obj.UEs = UEs;
             obj.NumUEs = numel(UEs);
             obj.NumSlotsFrame = (10e-3 * gNB.SubcarrierSpacing) / 15; % Number of slots in a 10 ms frame

@@ -18,45 +18,44 @@ classdef helperNRMetricsVisualizer < handle
     %   PlotSchedulerMetrics - Switch to turn on/off the scheduler performance metrics plots
     %   PlotPhyMetrics       - Switch to turn on/off the PHY metrics plots
     %   PlotRLCMetrics       - Switch to turn on/off the RLC metrics plots
-    %   PlotCDFMetrics       - Switch to turn on/off the CDF plots for cell throughput and BLER metrics
-    %   NumMetricsSteps      - Number of times metrics plots to be updated
+    %   PlotCDFMetrics       - Switch to turn on/off the CDF plots for MAC cell
+    %                          throughput, BLER and application latency metrics
+    %   RefreshRate          - Visualization refresh rate in Hz (updates per second)
 
-    %   Copyright 2022-2024 The MathWorks, Inc.
+    %   Copyright 2022-2026 The MathWorks, Inc.
 
     properties
         %CellOfInterest Cell id to which the visualization belongs
-        CellOfInterest (1, 1) {mustBeInteger, mustBeInRange(CellOfInterest, 0, 1007)} = 1;
+        CellOfInterest (1, 1) {mustBeInteger, mustBeBetween(CellOfInterest, 0, 1007,"closed")} = 1;
 
         %LinkDirection  Indicates the link direction associated to the plots to visualize
-        % It takes the values 0, 1, 2 and represent downlink, uplink, and both link
-        % directions respectively. Default value is 2.
-        LinkDirection = 2;
+        % It takes the values "DL", "UL", and "Both". Default value is "Both".
+        LinkDirection (1,1) string {mustBeMember(LinkDirection, ["DL", "UL", "Both"])} = "Both";
 
         %PlotSchedulerMetrics Switch to turn on/off the scheduler performance metrics plots
         % It is a logical scalar. Set the value as true to enable the plots. By
         % default the plots ar disabled
-        PlotSchedulerMetrics = false;
+        PlotSchedulerMetrics (1,1) logical = false;
 
         %PlotPhyMetrics Switch to turn on/off the PHY metrics plots
         % It is a logical scalar. Set the value as true to enable the plots. By
         % default, the plots are disabled
-        PlotPhyMetrics = false;
+        PlotPhyMetrics (1,1) logical = false;
 
         %PlotRLCMetrics Switch to turn on/off the RLC metrics plots
         % It is a logical scalar. Set the value as true to enable the plots. By
         % default, the plots are disabled
-        PlotRLCMetrics = false;
+        PlotRLCMetrics (1,1) logical = false;
 
-        %PlotCDFMetrics Switch to turn on/off the CDF plots for cell throughput and BLER metrics
+        %PlotCDFMetrics Switch to turn on/off the CDF plots for MAC cell throughput, BLER and application latency metrics
         % It is a logical scalar. Set the value as true to enable the plots. By
-        % default, the plots are disabled
-        PlotCDFMetrics = false;
+        % default, the plots are disabled. The CDF plots are generated using data
+        % collected at each metrics step duration i.e., duration (in milliseconds)
+        % of one metrics step.
+        PlotCDFMetrics (1,1) logical = false;
 
         %RefreshRate Visualization refresh rate in Hz
-        RefreshRate;
-
-        %NumMetricsSteps Number of times metrics plots are updated (TO BE DEPRECATED)
-        NumMetricsSteps = 10;
+        RefreshRate (1,1) double {mustBePositive, mustBeInteger} = 10;
     end
 
     properties(Hidden)
@@ -74,12 +73,30 @@ classdef helperNRMetricsVisualizer < handle
 
         %MACCDFVisualizationFigHandle Handle of the MAC CDF visualization
         MACCDFVisualizationFigHandle
+
+        %AppCDFVisualizationFigHandle Handle of the App CDF visualization
+        AppCDFVisualizationFigHandle
+
+        %AvgBLER Average block error rate (BLER) for CellOfInterest
+        % Matrix of size 'MetricsStepDuration-by-2', where 2 represents the columns
+        % for downlink and uplink
+        AvgBLER 
+
+        %CellThroughput Cell throughput of CellOfInterest
+        % Matrix of size 'MetricsStepDuration-by-2', where 2 represents the columns
+        % for downlink and uplink
+        CellThroughput
+
+        %AvgAppLatency Average application layer latency for CellOfInterest
+        % Matrix of size 'MetricsStepDuration-by-2', where 2 represents the columns
+        % for downlink and uplink
+        AvgAppLatency
+
+        %KPIManager Store the hNRKPIManager class object to calculate the Key Performance Indicator (KPI) i.e., "phy-bler", "app-latency"
+        KPIManager hNRKPIManager
     end
 
     properties (Access = private)
-        %SimTime Simulation end time (in seconds)
-        SimTime
-
         %ULRLCMetrics Contains RLC metrics of UEs in uplink
         % It is a column vector of length M, where M represents the number of UEs
         ULRLCMetrics
@@ -92,6 +109,10 @@ classdef helperNRMetricsVisualizer < handle
         % A vector of two elements. First and second elements represent the
         % downlink and uplink theoretical peak data rate respectively
         PeakDataRate = zeros(2, 1);
+
+        %TargetBLER Target BLER
+        % Same value for downlink and uplink
+        TargetBLER = 0.1;
 
         %Bandwidth Carrier bandwidth
         % A vector of two elements and represents the downlink and uplink bandwidth
@@ -127,18 +148,16 @@ classdef helperNRMetricsVisualizer < handle
         % columns for downlink and uplink
         ResourceShareMetrics
 
-        %AvgBLER Average block error rate (BLER) for CellOfInterest
-        % Matrix of size 'MetricsStepDuration-by-2', where 2 represents the columns
-        % for downlink and uplink
-        AvgBLER
-
-        %CellThroughput Cell throughput of CellOfInterest
-        % Matrix of size 'MetricsStepDuration-by-2', where 2 represents the columns
-        % for downlink and uplink
-        CellThroughput
-
         %NumUEs The total number of UE node objects
         NumUEs
+
+        %LinkDirectionIdx  Indicate the link direction index associated with the metrics plots
+        % It takes the values 0, 1, 2 and represent downlink, uplink, and both link
+        % directions respectively. Default value is 2.
+        LinkDirectionIdx
+
+        %RefreshInterval Indicate the time duration between metric updates (in seconds)
+        RefreshInterval 
     end
 
     properties (WeakHandle, SetAccess = private)
@@ -160,6 +179,14 @@ classdef helperNRMetricsVisualizer < handle
         % metric line and peak data rate metric line. Remaining 18 metric lines
         % will be used for plotting UE level metrics.
         MaxMetricLinesPerSubPlot = 18;
+    end
+
+    properties (SetAccess=private, WeakHandle, Hidden)
+        %NetworkSimulator Handle of the wirelessNetworkSimulator instance
+        % This can be set through N-V pair in the constructor. If not set, it will
+        % be obtained by calling wirelessNetworkSimulator.getInstance().
+
+        NetworkSimulator wirelessNetworkSimulator {mustBeScalarOrEmpty}
     end
 
     properties (Access = private, Constant, Hidden)
@@ -192,15 +219,25 @@ classdef helperNRMetricsVisualizer < handle
             %   LinkDirection        - Indicates the link direction associated to the plots to visualize
             %   PlotSchedulerMetrics - Switch to turn on/off the scheduler performance metrics plots
             %   PlotPhyMetrics       - Switch to turn on/off the PHY metrics plots
-            %   PlotCDFMetrics       - Switch to turn on/off the CDF plots for cell throughput and BLER metrics
-            %   NumMetricsSteps      - Number of times metrics plots to be updated (TO BE DEPRECATED)
+            %   PlotCDFMetrics       - Switch to turn on/off the CDF plots for MAC cell throughput, BLER and application latency metrics
             %   RefreshRate          - Visualization refresh rate in Hz (updates per second)
+            %   NetworkSimulator     - Network simulator instance
 
-            networkSimulator = wirelessNetworkSimulator.getInstance();
             % Initialize the properties
             for idx = 1:2:numel(varargin)
                 obj.(varargin{idx}) = varargin{idx+1};
             end
+
+            if isempty(obj.NetworkSimulator)
+                % Get the network simulator instance, if not passed as N-V pair
+                try
+                    obj.NetworkSimulator = wirelessNetworkSimulator.getInstance;
+                catch
+                    % Error when there is no valid wireless network simulator instance
+                    coder.internal.error("Initialize the wireless network simulator using 'wirelessNetworkSimulator.init' before creating the metrics visualizer instance.");
+                end
+            end
+
             obj.GNB = gNB;
             obj.UEs = UEs;
 
@@ -224,11 +261,6 @@ classdef helperNRMetricsVisualizer < handle
             obj.ULRLCMetrics = zeros(totalNumUEs, 1);
             obj.DLRLCMetrics = zeros(totalNumUEs, 1);
 
-            if obj.LinkDirection ~= 2
-                % Either UL or DL is enabled
-                obj.PlotIDs = obj.LinkDirection+1;
-            end
-
             [obj.PeakDataRate(obj.DownlinkIdx), obj.PeakDataRate(obj.UplinkIdx)] = calculatePeakDataRate(obj);
             obj.Bandwidth(obj.DownlinkIdx) = obj.GNB.ChannelBandwidth;
             obj.Bandwidth(obj.UplinkIdx) = obj.GNB.ChannelBandwidth;
@@ -236,8 +268,20 @@ classdef helperNRMetricsVisualizer < handle
             % Initialize the properties for visualizing the CDF plots
             obj.AvgBLER = [];
             obj.CellThroughput = [];
+            obj.AvgAppLatency = [];
 
-            scheduleAction(networkSimulator, @obj.initLiveMetricPlots, [], 0);
+            obj.RefreshInterval = 1/obj.RefreshRate;
+            logInterval = 10e-3; % Default log interval
+            if obj.RefreshInterval < logInterval
+                logInterval = obj.RefreshInterval;
+            end
+
+            if isempty(obj.KPIManager)
+                % Create the hNRKPIManager object
+                obj.KPIManager = hNRKPIManager(Node={obj.GNB,obj.UEs},KPIString=["phy-bler", "app-latency"],LogInterval=logInterval);
+            end
+
+            schedulePreSimulationAction(obj.NetworkSimulator, @obj.initLiveMetricPlots, []);
         end
 
         function addRLCVisualization(obj)
@@ -260,7 +304,7 @@ classdef helperNRMetricsVisualizer < handle
             txBytes = zeros(1, numUEs);
 
             set(obj.RLCVisualization, 'LayoutDimensions', [numel(obj.PlotIDs) 1], 'ShowLegend', true, 'AxesScaling', 'Updates', 'AxesScalingNumUpdates', 1, ...
-                'SampleRate', obj.RefreshRate,'TimeSpanSource', 'property','ChannelNames', repmat(obj.UELegend(1:numUEs), [1 numel(obj.PlotIDs)]), 'TimeSpan', obj.SimTime);
+                'SampleRate', obj.RefreshRate,'TimeSpanSource', 'property','ChannelNames', repmat(obj.UELegend(1:numUEs), [1 numel(obj.PlotIDs)]), 'TimeSpan', 1);
 
             titles = {'Downlink RLC', 'Uplink RLC'};
             % Initialize the plots
@@ -308,14 +352,14 @@ classdef helperNRMetricsVisualizer < handle
 
                     set(obj.MACVisualization{windowId}, 'LayoutDimensions',[2 2], 'ChannelNames', channelNames,...
                         'ActiveDisplay',1, 'YLabel',[tag{windowId} 'Tx rate (Mbps)'], 'ShowLegend',true,'AxesScaling', 'Updates', ...
-                        'AxesScalingNumUpdates', 1, 'TimeSpanSource', 'property', 'TimeSpan', obj.SimTime, ...
+                        'AxesScalingNumUpdates', 1, 'TimeSpanSource', 'property', 'TimeSpan', 1, ...
                         'ActiveDisplay',2, 'YLabel',[tag{windowId} 'Resource Share (%)'], ...
                         'ShowLegend',true, 'YLimits',[1 100],'AxesScaling', 'Updates','AxesScalingNumUpdates', 1, ...
-                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', obj.SimTime, ...
+                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', 1, ...
                         'ActiveDisplay',3, 'YLabel',[tag{windowId} 'Throughput (Mbps)'], 'ShowLegend',true,'AxesScaling', 'Updates', 'AxesScalingNumUpdates', 1, ...
-                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', obj.SimTime, ...
+                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', 1, ...
                         'ActiveDisplay',4, 'YLabel',[tag{windowId} 'Buffer Status (KB)'], 'ShowLegend',true,'AxesScaling', 'Updates', 'AxesScalingNumUpdates', 1, ...
-                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', obj.SimTime);
+                        'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property', 'TimeSpan', 1);
                     obj.MACVisualization{windowId}([nodeMetrics 0 obj.PeakDataRate(windowId)], nodeMetrics, [nodeMetrics 0 obj.PeakDataRate(windowId)], nodeMetrics);
                 end
             end
@@ -339,16 +383,17 @@ classdef helperNRMetricsVisualizer < handle
                     numUEs = obj.MaxMetricLinesPerSubPlot;
                 end
                 blerData = zeros(1, numUEs);
+                channelNames = [obj.UELegend(1:numUEs) 'Target BLER' obj.UELegend(1:numUEs) 'Target BLER'];
 
-                set(obj.PhyVisualization, 'LayoutDimensions', [numel(obj.PlotIDs) 1], 'ShowLegend', true, ...
-                    'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property','ChannelNames', repmat(obj.UELegend(1:numUEs), [1 numel(obj.PlotIDs)]), 'TimeSpan', obj.SimTime);
+                set(obj.PhyVisualization, 'LayoutDimensions', [numel(obj.PlotIDs) 1], 'ShowLegend', true, 'AxesScaling', 'Updates', 'AxesScalingNumUpdates', 1, ...
+                    'SampleRate', obj.RefreshRate, 'TimeSpanSource', 'property','ChannelNames', channelNames, 'TimeSpan', 1);
 
                 titles = {'Downlink BLER', 'Uplink BLER'};
                 % Initialize the plots
                 if isscalar(obj.PlotIDs)
-                    obj.PhyVisualization(blerData);
+                    obj.PhyVisualization(blerData, obj.TargetBLER);
                 else
-                    obj.PhyVisualization(blerData, blerData);
+                    obj.PhyVisualization([blerData, obj.TargetBLER], [blerData, obj.TargetBLER]);
                 end
 
                 % Add the titles and legends
@@ -376,15 +421,34 @@ classdef helperNRMetricsVisualizer < handle
             plotLivePhyMetrics(obj);
         end
 
+        function plotRemLiveMetrics(obj, varargin)
+            %plotRemLiveMetrics Updates the remaining metric plots by querying from nodes, if
+            %simulation time isn't a multiple of refresh interval
+
+            if mod(obj.NetworkSimulator.EndTime, obj.RefreshInterval)
+                plotLiveMetrics(obj,varargin);
+            end
+        end
+
+        function calculateRemLatency(obj, varargin)
+            %calculateRemLatency Calculates the latency for the remaining simulation
+            %time, if simulation time isn't a multiple of refresh interval
+
+            if mod(obj.NetworkSimulator.EndTime, obj.RefreshInterval)
+                calculateLatency(obj,varargin);
+            end
+        end
+
         function displayPerformanceIndicators(obj)
 
+            currTime = obj.NetworkSimulator.CurrentTime; % Simulation time (in seconds)
             if ismember(obj.UplinkIdx, obj.PlotIDs) % Uplink stats
-                ulThroughput = (obj.MACRxBytes(:, obj.UplinkIdx) .* 8) ./ (obj.SimTime * 1000 * 1000); % Mbps
+                ulThroughput = (obj.MACRxBytes(:, obj.UplinkIdx) .* 8) ./ (currTime * 1000 * 1000); % Mbps
                 ulPeakSpectralEfficiency = 1e6*obj.PeakDataRate(obj.UplinkIdx)/obj.Bandwidth(obj.UplinkIdx);
                 ulAchSpectralEfficiency = 1e6*sum(ulThroughput)/obj.Bandwidth(obj.UplinkIdx);
-                fprintf("Peak UL throughput: %0.2f Mbps. Achieved cell UL throughput: %0.2f Mbps\n", obj.PeakDataRate(obj.UplinkIdx), sum(ulThroughput));
-                disp(['Achieved UL throughput for each UE: [' num2str(round(ulThroughput, 2)') ']']);
-                fprintf("Peak UL spectral efficiency: %0.2f bits/s/Hz. Achieved UL spectral efficiency for cell: %0.2f bits/s/Hz \n", ulPeakSpectralEfficiency, ulAchSpectralEfficiency);
+                fprintf("Peak UL throughput: %0.2f Mbps\nAchieved cell UL throughput: %0.2f Mbps\n", obj.PeakDataRate(obj.UplinkIdx), sum(ulThroughput));
+                fprintf(['Achieved UL throughput for each UE: [' num2str(round(ulThroughput, 2)') ']']);
+                fprintf("\nPeak UL spectral efficiency: %0.2f bits/s/Hz\nAchieved UL spectral efficiency for cell: %0.2f bits/s/Hz \n", ulPeakSpectralEfficiency, ulAchSpectralEfficiency);
 
                 ulBLER = obj.ULBLERInfo(:, 1) ./ obj.ULBLERInfo(:, 2);
                 ulBLER(isnan(ulBLER)) = 0;
@@ -392,12 +456,12 @@ classdef helperNRMetricsVisualizer < handle
             end
 
             if ismember(obj.DownlinkIdx, obj.PlotIDs) % Downlink stats
-                dlThroughput = (obj.MACRxBytes(:, obj.DownlinkIdx) .* 8) ./ (obj.SimTime * 1000 * 1000); % Mbps
+                dlThroughput = (obj.MACRxBytes(:, obj.DownlinkIdx) .* 8) ./ (currTime * 1000 * 1000); % Mbps
                 dlPeakSpectralEfficiency = 1e6*obj.PeakDataRate(obj.DownlinkIdx)/obj.Bandwidth(obj.DownlinkIdx);
                 dlAchSpectralEfficiency = 1e6*sum(dlThroughput)/obj.Bandwidth(obj.DownlinkIdx);
-                fprintf("Peak DL throughput: %0.2f Mbps. Achieved cell DL throughput: %0.2f Mbps\n", obj.PeakDataRate(obj.DownlinkIdx), sum(dlThroughput));
-                disp(['Achieved DL throughput for each UE: [' num2str(round(dlThroughput, 2)') ']']);
-                fprintf("Peak DL spectral efficiency: %0.2f bits/s/Hz. Achieved DL spectral efficiency for cell: %0.2f bits/s/Hz\n", dlPeakSpectralEfficiency, dlAchSpectralEfficiency);
+                fprintf("Peak DL throughput: %0.2f Mbps\nAchieved cell DL throughput: %0.2f Mbps\n", obj.PeakDataRate(obj.DownlinkIdx), sum(dlThroughput));
+                fprintf(['Achieved DL throughput for each UE: [' num2str(round(dlThroughput, 2)') ']']);
+                fprintf("\nPeak DL spectral efficiency: %0.2f bits/s/Hz\nAchieved DL spectral efficiency for cell: %0.2f bits/s/Hz\n", dlPeakSpectralEfficiency, dlAchSpectralEfficiency);
 
                 dlBLER = obj.DLBLERInfo(:, 1) ./ obj.DLBLERInfo(:, 2);
                 dlBLER(isnan(dlBLER)) = 0;
@@ -451,40 +515,34 @@ classdef helperNRMetricsVisualizer < handle
         end
 
         function metrics = getMetrics(obj)
-            %getMACMetrics Return the metrics after live visualization
+            %getMetrics Return the metrics after live visualization
             %
-            % METRICS = getMetrics(OBJ) Returns the metrics corresponding to the
-            % enabled metrics visualization.
+            % METRICS = getMetrics(OBJ) Returns the metrics
             %
-            % METRICS - It is a structure and returns simulation metrics corresponding
-            % to the enabled visualizations. It has the following fields.
+            % METRICS - It is a structure. It has the following fields.
             %   MACMetrics - Metrics of MAC layer
             %   PhyMetrics - Metrics of Phy layer
 
             metrics = struct('MACMetrics',[],'PhyMetrics',[]);
             rntiList = [obj.UEs.RNTI];
 
-            if obj.PlotSchedulerMetrics
-                dlTxBytes = obj.MACTxBytes(:, obj.DownlinkIdx);
-                dlThroughputBytes = obj.MACRxBytes(:, obj.DownlinkIdx);
-                dlRBs = obj.ResourceShareMetrics(:, obj.DownlinkIdx);
-                ulTxBytes = obj.MACTxBytes(:, obj.UplinkIdx);
-                ulThroughputBytes = obj.MACRxBytes(:, obj.UplinkIdx);
-                ulRBs = obj.ResourceShareMetrics(:, obj.UplinkIdx);
-                macMetrics = table(rntiList', dlTxBytes, dlThroughputBytes, dlRBs, ...
-                    ulTxBytes, ulThroughputBytes, ulRBs);
-                macMetrics.Properties.VariableNames = {'RNTI', 'DL Tx Bytes', ...
-                    'DL Throughput Bytes', 'DL RBs allocated', 'UL Tx Bytes', 'UL Throughput Bytes', 'UL RBs allocated'};
-                metrics.MACMetrics = macMetrics;
-            end
+            dlTxBytes = obj.MACTxBytes(:, obj.DownlinkIdx);
+            dlThroughputBytes = obj.MACRxBytes(:, obj.DownlinkIdx);
+            dlRBs = obj.ResourceShareMetrics(:, obj.DownlinkIdx);
+            ulTxBytes = obj.MACTxBytes(:, obj.UplinkIdx);
+            ulThroughputBytes = obj.MACRxBytes(:, obj.UplinkIdx);
+            ulRBs = obj.ResourceShareMetrics(:, obj.UplinkIdx);
+            macMetrics = table(rntiList', dlTxBytes, dlThroughputBytes, dlRBs, ...
+                ulTxBytes, ulThroughputBytes, ulRBs);
+            macMetrics.Properties.VariableNames = {'RNTI', 'DL Tx Bytes', ...
+                'DL Throughput Bytes', 'DL RBs allocated', 'UL Tx Bytes', 'UL Throughput Bytes', 'UL RBs allocated'};
+            metrics.MACMetrics = macMetrics;
 
-            if obj.PlotPhyMetrics
-                phyMetrics = table(rntiList', obj.DLBLERInfo(rntiList, 2),obj.DLBLERInfo(rntiList, 1), ...
-                    obj.ULBLERInfo(rntiList, 2), obj.ULBLERInfo(rntiList, 1));
-                phyMetrics.Properties.VariableNames = {'RNTI', 'Number of Packets (DL)', ...
-                    'Decode Failures (DL)', 'Number of Packets (UL)', 'Decode Failures (UL)'};
-                metrics.PhyMetrics = phyMetrics;
-            end
+            phyMetrics = table(rntiList', obj.DLBLERInfo(rntiList, 2),obj.DLBLERInfo(rntiList, 1), ...
+                obj.ULBLERInfo(rntiList, 2), obj.ULBLERInfo(rntiList, 1));
+            phyMetrics.Properties.VariableNames = {'RNTI', 'Number of Packets (DL)', ...
+                'Decode Failures (DL)', 'Number of Packets (UL)', 'Decode Failures (UL)'};
+            metrics.PhyMetrics = phyMetrics;
         end
 
         function [cellSE, cellBLER] = getCellMetrics(obj)
@@ -502,7 +560,7 @@ classdef helperNRMetricsVisualizer < handle
             %            the columns for downlink and uplink.
             %
             % The metric step duration is computed based on the following formula
-            % metricsStepDuration = max(metricsStepSize * (15 / scs) /obj.NumMetricsSteps,1);
+            % metricsStepDuration = max(numSlotsPerSecond/obj.RefreshRate, 1) * (15 / scs)
 
             cellSE = 1e6*obj.CellThroughput./obj.Bandwidth;
             cellBLER = obj.AvgBLER;
@@ -519,7 +577,7 @@ classdef helperNRMetricsVisualizer < handle
             ulTxBytes = zeros(numUEs, 1);
             dlTxBytes = zeros(numUEs, 1);
 
-            if obj.LinkDirection ~= 1 % Downlink
+            if obj.LinkDirectionIdx ~= 1 % Downlink
                 gNBStats = statistics(obj.GNB, "all");
                 gNBRLCStats = gNBStats.RLC.Destinations;
                 for idx = 1:numUEs
@@ -530,7 +588,7 @@ classdef helperNRMetricsVisualizer < handle
                 end
             end
 
-            if obj.LinkDirection ~= 0 % Uplink
+            if obj.LinkDirectionIdx ~= 0 % Uplink
                 for idx = 1:numUEs
                     ueStats = statistics(ueList(idx));
                     ulTxBytes(idx) = ueStats.RLC.TransmittedBytes;
@@ -553,7 +611,7 @@ classdef helperNRMetricsVisualizer < handle
             cellTxRate = zeros(2, 2);
             cellThroughputMetrics = zeros(2, 2);
             gNBMACStats = statistics(obj.GNB, "all").MAC.Destinations;
-            if obj.LinkDirection ~= 0 % Uplink
+            if obj.LinkDirectionIdx ~= 0 % Uplink
                 for ueIdx = 1:numUEs
                     rnti = ueList(ueIdx).RNTI;
                     gNBRxBytes = gNBMACStats(rnti).ReceivedBytes;
@@ -587,7 +645,7 @@ classdef helperNRMetricsVisualizer < handle
 
             gNBMAC = obj.GNB.MACEntity;
             bufferSize = sum(gNBMAC.LCHBufferStatus,2);
-            if obj.LinkDirection ~= 1 % Downlink
+            if obj.LinkDirectionIdx ~= 1 % Downlink
                 for ueIdx = 1:numUEs
                     ueMACStats = statistics(ueList(ueIdx)).MAC;
                     throughput(ueIdx, obj.DownlinkIdx) = (ueMACStats.ReceivedBytes - obj.MACRxBytes(ueIdx, obj.DownlinkIdx))* 8 / (obj.MetricsStepDuration * 1000); % In Mbps
@@ -634,39 +692,71 @@ classdef helperNRMetricsVisualizer < handle
             blerData = zeros(numUEs, 2);
             dlBLERInfo = zeros(numUEs, 2);
             ulBLERInfo = zeros(numUEs, 2);
+            startTimeForKPICal = max(0, round(obj.NetworkSimulator.CurrentTime - obj.RefreshInterval, 9));
+            endTimeForKPICal = obj.NetworkSimulator.CurrentTime;
 
-            if obj.LinkDirection ~= 1 % Downlink
+            if obj.LinkDirectionIdx ~= 1 % Downlink
                 for idx = 1:numUEs
                     uePHYStats = statistics(ueList(idx)).PHY;
                     dlBLERInfo(idx, :) = [uePHYStats.DecodeFailures uePHYStats.ReceivedPackets];
                 end
-                blerData(:, obj.DownlinkIdx) = ((dlBLERInfo(:, 1) - obj.DLBLERInfo(:, 1)) ./ (dlBLERInfo(:, 2) - obj.DLBLERInfo(:, 2)));
+                blerData(:, obj.DownlinkIdx) = kpi(obj.KPIManager, obj.GNB, obj.UEs, "phy-bler", ...
+                    StartTime=startTimeForKPICal, EndTime=endTimeForKPICal,LinkType="DL");
                 obj.DLBLERInfo = dlBLERInfo;
             end
 
-            if obj.LinkDirection ~= 0 % Uplink
+            if obj.LinkDirectionIdx ~= 0 % Uplink
                 gNBPHYStats = statistics(obj.GNB,"all").PHY.Destinations;
                 for idx = 1:numUEs
                     rnti = ueList(idx).RNTI;
                     ulBLERInfo(idx, :) = [gNBPHYStats(rnti).DecodeFailures gNBPHYStats(rnti).ReceivedPackets];
                 end
-                blerData(:, obj.UplinkIdx) = ((ulBLERInfo(:, 1) - obj.ULBLERInfo(:, 1)) ./ (ulBLERInfo(:, 2) - obj.ULBLERInfo(:, 2)));
+                blerData(:, obj.UplinkIdx) = kpi(obj.KPIManager, obj.UEs, obj.GNB, "phy-bler", ...
+                    StartTime=startTimeForKPICal, EndTime=endTimeForKPICal, LinkType="UL");
                 obj.ULBLERInfo = ulBLERInfo;
             end
             blerData = blerData';
 
             % Calculate average BLER in the uplink and downlink directions
-            numUEDL = nnz(~isnan(blerData(1,:)));
-            numUEUL = nnz(~isnan(blerData(2,:)));
-            avgBLERDL = sum(blerData(1,:),'omitnan')/numUEDL;
-            avgBLERUL = sum(blerData(2,:),'omitnan')/numUEUL;
-
+            avgBLERDL = kpi(obj.KPIManager, obj.GNB, [], "phy-bler", ...
+                StartTime=startTimeForKPICal, EndTime=endTimeForKPICal, LinkType="DL");
+            avgBLERUL = kpi(obj.KPIManager, obj.GNB, [], "phy-bler", ...
+                StartTime=startTimeForKPICal, EndTime=endTimeForKPICal, LinkType="UL");
             % Append BLER values to the AvgBLER array
             obj.AvgBLER = [obj.AvgBLER; avgBLERDL, avgBLERUL];
 
             if obj.PlotPhyMetrics
-                updatePhyMetrics(obj, blerData);
+                updatePhyMetrics(obj, blerData, obj.TargetBLER);
             end
+        end
+
+        function calculateLatency(obj, ~, ~)
+            %calculateLatency Calculate the average application layer latency
+
+            startTimeForKPICal = max(0, round(obj.NetworkSimulator.CurrentTime - obj.RefreshInterval, 9));
+            endTimeForKPICal = obj.NetworkSimulator.CurrentTime;
+            numUEs = obj.NumUEs;
+            dlLatency = zeros(numUEs, 1);
+            ulLatency = zeros(numUEs, 1);
+
+            % Get the average application layer latency
+            if obj.LinkDirectionIdx ~= 1 % Downlink
+                dlLatency = kpi(obj.KPIManager, obj.GNB, obj.UEs, "app-latency", ...
+                    StartTime=startTimeForKPICal, EndTime=endTimeForKPICal);
+            end
+            if obj.LinkDirectionIdx ~= 0 % Uplink
+                ulLatency = kpi(obj.KPIManager, obj.UEs, obj.GNB, "app-latency", ...
+                    StartTime=startTimeForKPICal, EndTime=endTimeForKPICal);
+            end
+
+            % Calculate average latency in the uplink and downlink directions
+            numUEDL = nnz(dlLatency);
+            numUEUL = nnz(ulLatency);
+            avgLatencyDL = sum(nonzeros(dlLatency))/numUEDL;
+            avgLatencyUL = sum(nonzeros(ulLatency))/numUEUL;
+
+            % Append latency values to the AvgAppLatency array
+            obj.AvgAppLatency = [obj.AvgAppLatency; avgLatencyDL, avgLatencyUL];
         end
 
         function updateRLCMetrics(obj, txRate)
@@ -685,6 +775,11 @@ classdef helperNRMetricsVisualizer < handle
                 obj.RLCVisualization(txRate(1:numUEs, obj.PlotIDs)');
             else
                 obj.RLCVisualization(txRate(1:numUEs, obj.DownlinkIdx)', txRate(1:numUEs, obj.UplinkIdx)');
+            end
+
+            if mod(obj.NetworkSimulator.CurrentTime, 1) == 0 && obj.NetworkSimulator.CurrentTime~=obj.NetworkSimulator.EndTime
+                % Update the x-axis limit as per the current simulation time
+                obj.RLCVisualization.TimeSpan = obj.RLCVisualization.TimeSpan + 1;
             end
         end
 
@@ -708,10 +803,14 @@ classdef helperNRMetricsVisualizer < handle
             for plotIdx = 1:numel(obj.PlotIDs)
                 plotId = obj.PlotIDs(plotIdx);
                 obj.MACVisualization{plotId}(txRate(plotId, cellLevelMetricsIdx), resourceshare(plotId, 1:numUEs), throughput(plotId, cellLevelMetricsIdx), bufferstatus(plotId, 1:numUEs));
+                % Update the x-axis limit as per the current simulation time
+                if mod(obj.NetworkSimulator.CurrentTime, 1) == 0 && obj.NetworkSimulator.CurrentTime~=obj.NetworkSimulator.EndTime
+                    obj.MACVisualization{plotId}.TimeSpan =  obj.MACVisualization{plotId}.TimeSpan + 1;
+                end
             end
         end
 
-        function updatePhyMetrics(obj, blerData)
+        function updatePhyMetrics(obj, blerData, targetBLER)
             %updatePhyMetrics Update the Phy metrics
 
             blerData(isnan(blerData)) = 0; % To handle NaN
@@ -724,33 +823,39 @@ classdef helperNRMetricsVisualizer < handle
 
             % Update the plots
             if isscalar(obj.PlotIDs)
-                obj.PhyVisualization(blerData(obj.PlotIDs, 1:numUEs));
+                obj.PhyVisualization(blerData(obj.PlotIDs, 1:numUEs), targetBLER);
             else
-                obj.PhyVisualization(blerData(obj.DownlinkIdx, 1:numUEs), blerData(obj.UplinkIdx, 1:numUEs));
+                obj.PhyVisualization([blerData(obj.DownlinkIdx, 1:numUEs), targetBLER], [blerData(obj.UplinkIdx, 1:numUEs), targetBLER]);
+            end
+
+            if mod(obj.NetworkSimulator.CurrentTime, 1) == 0 && obj.NetworkSimulator.CurrentTime~=obj.NetworkSimulator.EndTime
+                % Update the x-axis limit as per the current simulation time
+                obj.PhyVisualization.TimeSpan = obj.PhyVisualization.TimeSpan + 1;
             end
         end
 
         function initLiveMetricPlots(obj, ~, ~)
             %initLiveMetricPlots Initialize metric plots
 
-            networkSimulator = wirelessNetworkSimulator.getInstance();
-            obj.SimTime = networkSimulator.EndTime; % Simulation time (in seconds)
+            % Update the LinkDirectionIdx based on the LinkDirection
+            switch obj.LinkDirection
+                case "DL"
+                    obj.LinkDirectionIdx = 0;
+                case "UL"
+                    obj.LinkDirectionIdx = 1;
+                otherwise
+                    obj.LinkDirectionIdx = 2;
+            end
+            if obj.LinkDirectionIdx ~= 2
+                % Either UL or DL is enabled
+                obj.PlotIDs = obj.LinkDirectionIdx+1;
+            end
 
             scs = obj.GNB.SubcarrierSpacing/1e3;
             % Interval at which metrics visualization updates in terms of number of
             % slots. Make sure that metric step size is an integer
-            numSlotsSim = (obj.SimTime * scs)/15e-3;
-            if ~isempty(obj.RefreshRate) % Update this logic on deprecating obj.NumMetricsSteps
-                numSlotsPerSecond = scs/15e-3;
-                metricsStepSize = max(numSlotsPerSecond/obj.RefreshRate,1);
-                obj.NumMetricsSteps = obj.RefreshRate * obj.SimTime;
-            else
-                if isempty(obj.NumMetricsSteps)
-                    obj.NumMetricsSteps = 10; % Set it to the old default
-                end
-                metricsStepSize = max(numSlotsSim/obj.NumMetricsSteps,1);
-                obj.RefreshRate = obj.NumMetricsSteps / obj.SimTime;
-            end
+            numSlotsPerSecond = scs/15e-3;
+            metricsStepSize = max(numSlotsPerSecond/obj.RefreshRate,1);
             obj.MetricsStepDuration = metricsStepSize * (15 / scs);
 
             % Create Phy visualization
@@ -764,12 +869,21 @@ classdef helperNRMetricsVisualizer < handle
                 addRLCVisualization(obj);
             end
 
+            networkSimulator = obj.NetworkSimulator;
             % Register periodic plot update event with network simulator
             if ~isempty(networkSimulator) && ~isempty(obj.GNB) && ~isempty(obj.UEs)
                 scheduleAction(networkSimulator, @obj.plotLiveMetrics, [], 1/obj.RefreshRate, 1/obj.RefreshRate);
+                scheduleAction(networkSimulator, @obj.calculateLatency, [], 1/obj.RefreshRate, 1/obj.RefreshRate);
+                % Plot the remaining metrics, if simulation time isn't a multiple of refresh interval
+                schedulePostSimulationAction(networkSimulator, @obj.plotRemLiveMetrics, []);
+                % Calculate the latency for the remaining simulation time
+                schedulePostSimulationAction(networkSimulator, @obj.calculateRemLatency, []);
+                % Update the timescope as per the simulation time
+                schedulePostSimulationAction(networkSimulator, @obj.updateTimescope, []);
                 if obj.PlotCDFMetrics % Plot BLER and cell throughput CDF
-                    scheduleAction(networkSimulator, @obj.plotPHYCDF, [], obj.SimTime);
-                    scheduleAction(networkSimulator, @obj.plotMACCDF, [], obj.SimTime);
+                    schedulePostSimulationAction(networkSimulator, @obj.plotPHYCDF, []);
+                    schedulePostSimulationAction(networkSimulator, @obj.plotMACCDF, []);
+                    schedulePostSimulationAction(networkSimulator, @obj.plotAppCDF, []);
                 end
             end
         end
@@ -786,14 +900,23 @@ classdef helperNRMetricsVisualizer < handle
 
             for idx=1:numel(obj.PlotIDs)
                 ax = subPlotAxes{idx};
-                if obj.LinkDirection == 1 % Only uplink visualization is on
+                if obj.LinkDirectionIdx == 1 % Only uplink visualization is on
                     idx = 2;
                 end
                 data = obj.AvgBLER(:,idx);
-                data(isnan(data)) = 0; % To handle NaN
+                data(isnan(data)) = []; % To handle NaN
 
-                % Call local function to calculate and plot ecdf
-                calculateAndPlotECDF(ax, data, titles{idx}, 'Average BLER', 'BLER');
+                if isempty(data)
+                    % Delete the axis, if no data to plot
+                    delete(ax);
+                    if ~all(isvalid([subPlotAxes{:}]))
+                        % Delete the figure
+                        delete(obj.PHYCDFVisualizationFigHandle);
+                    end
+                else
+                    % Call local function to calculate and plot ecdf
+                    calculateAndPlotECDF(ax, data, titles{idx}, 'Average BLER', 'BLER');
+                end
             end
         end
 
@@ -809,13 +932,54 @@ classdef helperNRMetricsVisualizer < handle
 
             for idx=1:numel(obj.PlotIDs)
                 ax = subPlotAxes{idx};
-                if obj.LinkDirection == 1 % Only uplink visualization is on
+                if obj.LinkDirectionIdx == 1 % Only uplink visualization is on
                     idx = 2;
                 end
                 data = obj.CellThroughput(:,idx);
 
-                % Call local function to calculate and plot ecdf
-                calculateAndPlotECDF(ax, data, titles{idx}, 'Cell Throughput', 'Cell Throughput (Mbps)');
+                if isempty(data)
+                    % Delete the axis, if no data to plot
+                    delete(ax);
+                    if ~all(isvalid([subPlotAxes{:}]))
+                        % Delete the figure
+                        delete(obj.MACCDFVisualizationFigHandle);
+                    end
+                else
+                    % Call local function to calculate and plot ecdf
+                    calculateAndPlotECDF(ax, data, titles{idx}, 'Cell Throughput', 'Cell Throughput (Mbps)');
+                end
+            end
+        end
+
+        function plotAppCDF(obj, varargin)
+            %plotAppCDF Plot CDF plots for the average application layer latency
+
+            % Create the visualization for BLER CDF plots
+            titles = {'Average App DL Latency', 'Average App UL Latency'};
+            obj.AppCDFVisualizationFigHandle = uifigure('Name', 'ECDF of Application Layer Latency', 'HandleVisibility', 'on');
+            % Use desktop theme to support dark theme mode
+            matlab.graphics.internal.themes.figureUseDesktopTheme(obj.AppCDFVisualizationFigHandle);
+            subPlotAxes = createCDFVisualization(obj, obj.AppCDFVisualizationFigHandle);
+
+            for idx=1:numel(obj.PlotIDs)
+                ax = subPlotAxes{idx};
+                if obj.LinkDirectionIdx == 1 % Only uplink visualization is on
+                    idx = 2;
+                end
+                data = obj.AvgAppLatency(:,idx);
+                data(isnan(data)) = []; % To handle NaN
+
+                if isempty(data)
+                    % Delete the axis, if no data to plot
+                    delete(ax);
+                    if ~all(isvalid([subPlotAxes{:}]))
+                         % Delete the figure
+                        delete(obj.AppCDFVisualizationFigHandle);  
+                    end
+                else
+                    % Call local function to calculate and plot ecdf
+                    calculateAndPlotECDF(ax, data, titles{idx}, 'Average Latency', 'Latency (s)');
+                end
             end
         end
 
@@ -832,6 +996,26 @@ classdef helperNRMetricsVisualizer < handle
             subPlotAxes = cell(1,1);
             for idx=1:numel(obj.PlotIDs)
                 subPlotAxes{idx} = subplot(numel(obj.PlotIDs),1,idx,'Parent', panel);
+            end
+        end
+
+
+        function updateTimescope(obj, varargin)
+            %updateTimescope Adjust timescopes at the end of simulation
+            if obj.PlotPhyMetrics
+                obj.PhyVisualization.TimeSpan = obj.NetworkSimulator.CurrentTime;
+                obj.PhyVisualization.release();
+            end
+            if obj.PlotSchedulerMetrics
+                for plotIdx = 1:numel(obj.PlotIDs)
+                    plotId = obj.PlotIDs(plotIdx);
+                    obj.MACVisualization{plotId}.TimeSpan = obj.NetworkSimulator.CurrentTime;
+                    obj.MACVisualization{plotId}.release();
+                end
+            end
+            if obj.PlotRLCMetrics
+                obj.RLCVisualization.TimeSpan = obj.NetworkSimulator.CurrentTime;
+                obj.RLCVisualization.release();
             end
         end
     end
