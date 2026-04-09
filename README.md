@@ -50,8 +50,8 @@ The repository includes the following exercises:
 Run the following files in MATLAB:
 
 - `EXPL1_NR_Simplest_Network_Soln.mlx`  
-- `EXPL3_NR_Interference_Modeling_Soln.mlx` 
-- `EXPL2_NR_Custom_Channel_Soln.mlx`  
+- `EXPL2_NR_Interference_Modeling_Soln.mlx` 
+- `EXPL3_NR_Custom_Channel_Soln.mlx`  
 - `EXPL4_NR_Custom_Scheduler_Soln.mlx`  
 
 
