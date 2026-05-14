@@ -38,7 +38,7 @@ The repository includes the following exercises:
 1. **Exercise 1** – Operate the simulation engine, configure 5G nodes, create a simple network, and view performance statistics  
 2. **Exercise 2** – 5G inter-cell interference modeling  
 3. **Exercise 3** – Integrate a custom downlink channel into the simulated 5G network  
-4. **Exercise 4** – Integrate a custom scheduler into the 5G network model  
+4. **Exercise 4** – Model MU-MIMO and Integrate a custom scheduler into the 5G network model  
 
 
 ## Setup
@@ -52,7 +52,7 @@ Run the following files in MATLAB:
 - `EXPL1_NR_Simplest_Network_Soln.mlx`  
 - `EXPL2_NR_Interference_Modeling_Soln.mlx` 
 - `EXPL3_NR_Custom_Channel_Soln.mlx`  
-- `EXPL4_NR_Custom_Scheduler_Soln.mlx`  
+- `EXPL4_NR_MU_MIMO.mlx`  
 
 
 ### MathWorks Products (https://www.mathworks.com)
