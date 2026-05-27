@@ -49,10 +49,10 @@ The repository includes the following exercises:
 ### To Run Completed Exercises
 Run the following files in MATLAB:
 
-- `EXPL1_NR_Simplest_Network.mlx`  
-- `EXPL2_NR_Interference_Modeling.mlx` 
-- `EXPL3_NR_Custom_Channel.mlx`  
-- `EXPL4_NR_MU_MIMO.mlx`  
+- `SOLN1_NR_Simplest_Network.mlx`  
+- `SOLN2_NR_Interference_Modeling.mlx` 
+- `SOLN3_NR_Custom_Channel.mlx`  
+- `SOLN4_NR_MU_MIMO.mlx`  
 
 
 ### MathWorks Products (https://www.mathworks.com)
