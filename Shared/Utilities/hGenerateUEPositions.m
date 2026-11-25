@@ -1,4 +1,4 @@
-function uePositions = generateUEPositions(cellRadius,gNBPositions,numUEsPerCell,varargin)
+function uePositions = hGenerateUEPositions(cellRadius,gNBPositions,numUEsPerCell,varargin)
 %generateUEPositions Return the position of UE nodes in each cell
 
 numCells = size(gNBPositions,1);

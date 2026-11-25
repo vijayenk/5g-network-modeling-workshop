@@ -1,5 +1,9 @@
 classdef hNRCustomChannelModel
     %hNRCustomChannelModel Create a custom channel model as an array of link-level CDL channels
+    %
+    %   Supports single-carrier and multi-carrier (Carrier Aggregation)
+    %   configurations. Each cell in the channel matrix contains a
+    %   dictionary keyed by carrier frequency with nrCDLChannel values.
 
     %   Copyright 2022-2026 The MathWorks, Inc.
 
@@ -48,7 +52,8 @@ classdef hNRCustomChannelModel
             % abstraction and assumes free-space-path-loss as pathloss type.
             %
             % CHANNELMODELMATRIX is a N-by-N array of link-level channels where N is
-            % the number nodes
+            % the number of nodes. Each non-empty cell contains a
+            % dictionary keyed by carrier frequency with nrCDLChannel values.
             %
             % OBJ = hNRCustomChannelModel(CHANNELMODELMATRIX, CHANNELCONFIGURATION)
             % creates a channel model where you can specify the PHY flavor and pathloss
@@ -85,18 +90,38 @@ classdef hNRCustomChannelModel
             end
             obj.PHYModelNum = ~strcmp(obj.PHYModel, "full-phy");
             obj.ChannelModelMatrix = channelModelMatrix;
-            obj.MaxChannelDelayMatrix = zeros(size(obj.ChannelModelMatrix));
-            obj.Los = zeros(size(obj.ChannelModelMatrix));
-            for i=1:size(obj.ChannelModelMatrix,1)
-                for j=1:size(obj.ChannelModelMatrix,2)
-                    if ~isempty(obj.ChannelModelMatrix{i,j})
-                        chInfo = info(obj.ChannelModelMatrix{i,j});
-                        obj.MaxChannelDelayMatrix(i,j) = ceil(max(chInfo.PathDelays*obj.ChannelModelMatrix{i,j}.SampleRate)) + chInfo.ChannelFilterDelay;
-                        [obj.ChannelFilter{i,j}, obj.PathFilter{i,j}] = getPathFilter(obj.ChannelModelMatrix{i,j});
-                        kFactor = chInfo.KFactorFirstCluster; % dB
-                        % Determine LOS between Tx and Rx based on Rician factor, K
-                        obj.Los(i,j) = kFactor>-Inf;
+            matSize = size(obj.ChannelModelMatrix);
+            obj.MaxChannelDelayMatrix = cell(matSize);
+            obj.PathFilter = cell(matSize);
+            obj.ChannelFilter = cell(matSize);
+            obj.Los = zeros(matSize);
+
+            for i=1:matSize(1)
+                for j=1:matSize(2)
+                    cellContent = obj.ChannelModelMatrix{i,j};
+                    if isempty(cellContent)
+                        continue;
                     end
+
+                    delayDict = dictionary;
+                    filterDict = dictionary;
+                    pathFilterDict = dictionary;
+                    % dictionary keyed by carrier frequency
+                    freqKeys = keys(cellContent);
+                    for k = 1:numel(freqKeys)
+                        ch = cellContent{freqKeys(k)};
+                        chInfo = info(ch);
+                        delayDict(freqKeys(k)) = ceil(max(chInfo.PathDelays*ch.SampleRate)) + chInfo.ChannelFilterDelay;
+                        [chFilt, pFilt] = getPathFilter(ch);
+                        filterDict(freqKeys(k)) = {chFilt};
+                        pathFilterDict(freqKeys(k)) = {pFilt};
+                    end
+                    kFactor = chInfo.KFactorFirstCluster; % dB
+                    % Determine LOS between Tx and Rx based on Rician factor, K
+                    obj.Los(i,j) = kFactor > -Inf;
+                    obj.MaxChannelDelayMatrix{i,j} = delayDict;
+                    obj.ChannelFilter{i,j} = filterDict;
+                    obj.PathFilter{i,j} = pathFilterDict;
                 end
             end
         end
@@ -113,43 +138,45 @@ classdef hNRCustomChannelModel
                 pathLoss = nrPathLoss(obj.NRPathLossConfig,txData.CenterFrequency,obj.Los(txData.TransmitterID,rxInfo.ID), ...
                     txData.TransmitterPosition',rxInfo.Position');
             end
-
             outputData.Power = outputData.Power - pathLoss;
-
-            if ~isempty(obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID})
+            linkEntry = obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID};
+            if ~isempty(linkEntry)
                 % There is channel model between the Tx and Rx node
-                obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID}.InitialTime = outputData.StartTime;
-                obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID}.NumTimeSamples =  ...
-                    txData.Metadata.NumSamples + obj.MaxChannelDelayMatrix(txData.TransmitterID, rxInfo.ID);
+                % Look up channel for this carrier frequency
+                freq = txData.CenterFrequency;
+                ch = linkEntry{freq};
+                maxDelay = obj.MaxChannelDelayMatrix{txData.TransmitterID, rxInfo.ID}(freq);
+
+                ch.InitialTime = outputData.StartTime;
+                ch.NumTimeSamples = txData.Metadata.NumSamples + maxDelay;
 
                 % Get path gains and sample times
-                [pathGains, outputData.Metadata.Channel.SampleTimes] = obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID}();
+                [pathGains, outputData.Metadata.Channel.SampleTimes] = ch();
 
                 % Find the subset of pathGains for the given NumTransmitAntennas and
                 % NumReceiveAntennas
                 outputData.Metadata.Channel.PathGains = pathGains(:, :, 1:txData.NumTransmitAntennas, 1:rxInfo.NumReceiveAntennas);
-                
+
                 % Normalize the path gains by the number of receive antennas
                 outputData.Metadata.Channel.PathGains = outputData.Metadata.Channel.PathGains / sqrt(rxInfo.NumReceiveAntennas);
 
                 % Assign path filters
-                outputData.Metadata.Channel.PathFilters = obj.PathFilter{txData.TransmitterID, rxInfo.ID};
+                outputData.Metadata.Channel.PathFilters = obj.PathFilter{txData.TransmitterID, rxInfo.ID}{freq};
 
                 if ~obj.PHYModelNum % full-phy
-                    rxWaveform = [txData.Data; zeros(obj.MaxChannelDelayMatrix(txData.TransmitterID, rxInfo.ID), ...
-                        size(txData.Data,2))];
+                    rxWaveform = [txData.Data; zeros(maxDelay, size(txData.Data,2))];
 
                     % Get the filtered data
                     filteredWaveform = channelFilterWrapper( ...
-                        obj.ChannelModelMatrix{txData.TransmitterID, rxInfo.ID}, rxWaveform, outputData.Metadata.Channel.PathGains, ...
-                        outputData.Metadata.Channel.SampleTimes, obj.ChannelFilter{txData.TransmitterID, rxInfo.ID}, ...
+                        ch, rxWaveform, outputData.Metadata.Channel.PathGains, ...
+                        outputData.Metadata.Channel.SampleTimes, obj.ChannelFilter{txData.TransmitterID, rxInfo.ID}{freq}, ...
                         outputData.Metadata.Channel.PathFilters, obj.FilterContinuityStruct);
 
                     % Apply path loss
                     outputData.Data = filteredWaveform.*(10.^(-pathLoss/20));
 
                     % Update duration
-                    outputData.Duration = outputData.Duration + (1/outputData.SampleRate)*obj.MaxChannelDelayMatrix(txData.TransmitterID, rxInfo.ID);
+                    outputData.Duration = outputData.Duration + (1/outputData.SampleRate)*maxDelay;
                 end
             else
                 % There is no channel model between the Tx and Rx node
